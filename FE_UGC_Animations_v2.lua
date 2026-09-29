@@ -3,29 +3,23 @@
     Universal Animation Manager
     Made By @in66ar
 
-    v2.3.0 CHANGES:
-      - Settings panel (button next to Save)
-      - Auto Execute (ON/OFF, default ON)
-      - Wait for Character (ON/OFF, default ON)
-      - Startup Delay (0s / 1s / 2s / 3s, default 0s)
-      - Remember Selected Animation (ON/OFF, default ON)
-      - Auto Apply Selected (ON/OFF, default ON)
-      - Auto Minimize (ON/OFF, default OFF)
-      - Auto Update + Update Interval (30s / 1m / 5m / Manual, default 1m)
-      - Clear Animation Cache
-      - UI Scale (90% / 100% / 110%, default 100%)
-      - Remember Last Tab (ON/OFF, default ON)
-      - Settings persistence (FeUgcAnim_Settings.json)
-      - Reset Settings
-      - Custom drag for minimized pill + main window header
-      - Guarded auto-execute (no duplicate execution)
-      - Character respawn handling
+    v2.3.0 AUTO EXECUTE FIX:
+      - Auto Execute is now a STARTUP-ONLY ceremony.
+      - Uses session-local flag "startupAutoExecuted".
+      - CharacterAdded is used ONLY to wait for the FIRST character,
+        then the listener is disconnected immediately.
+      - Respawn does NOT re-trigger Auto Execute.
+      - Rejoining the game creates a new script session, so
+        Auto Execute runs again — as intended.
+      - Auto Execute respects Settings.AutoExecute across all places.
 
-    v2.2.0 / v2.1.0 / v2.0.0 features preserved:
-      - Discover, Saved, Search, Clear, Bookmark, Preview,
-        Wear Selected, Wear All, Auto Equip, Cache, Pagination,
-        Dark/Light theme, theme persistence, floating GUI,
-        minimize, close.
+    v2.3.0 features preserved:
+      - Settings panel, Wait for Character, Startup Delay,
+        Remember Selected Animation, Auto Apply Selected,
+        Auto Minimize, Auto Update + Interval, Clear Cache,
+        UI Scale, Remember Last Tab, Reset Settings.
+
+    v2.2.0 / v2.1.0 / v2.0.0 features preserved.
 ]]
 
 local plrs = game:GetService("Players")
@@ -71,8 +65,6 @@ local buttonOrder = {
 	"swimanimation"
 }
 
--- Safe unicode icon bytes, built via string.char so the source file's own
--- encoding can never corrupt these glyphs.
 local function uchr(...) return string.char(...) end
 local ICO_BACK      = uchr(226,134,144)
 local ICO_NEXT      = uchr(226,134,146)
@@ -82,7 +74,6 @@ local ICO_CHECK     = uchr(226,156,147)
 local ICO_PLAY      = uchr(226,150,182)
 local ICO_DOTS      = uchr(226,128,166)
 local ICO_DOT       = uchr(226,128,162)
--- Clear button deliberately uses ASCII "X".
 
 local CACHE_FILE_NAME = "animation_bundle_data_cache.json"
 local ANIM_CACHE_URL = "https://raw.githubusercontent.com/TribalFootball/TuffTeto/main/animation_bundle_data_cache.json"
@@ -185,7 +176,6 @@ local Themes = {
 }
 
 local function readThemeFromFiles()
-	-- Prefer settings file, fall back to legacy theme file
 	local t = settings.Theme
 	if t ~= "Dark" and t ~= "Light" then
 		local ok, content = pcall(function()
@@ -217,7 +207,6 @@ end
 
 local Theme = readThemeFromFiles()
 
--- C is the single source of truth for current theme colors.
 local C = {}
 local function syncC()
 	for k, v in pairs(Themes[Theme]) do
@@ -225,6 +214,16 @@ local function syncC()
 	end
 end
 syncC()
+
+-- ============================================================
+-- FORWARD DECLARATIONS (must be before settings panel callbacks
+-- reference them, otherwise the closures bind to globals)
+-- ============================================================
+
+local executionState = { inProgress = false, completedFor = nil }
+local startupAutoExecuted = false     -- session-local: true after Auto Execute ran once
+local triggerAutoExecute              -- assigned in AUTO EXECUTE SYSTEM section
+local restartUpdateLoop               -- assigned in AUTO UPDATE section
 
 -- ============================================================
 -- CACHE STATE
@@ -278,10 +277,8 @@ local function applySavedAnimations(char)
 	animate.Disabled = false
 end
 
--- The existing "initAutoEquip" is the script's implicit EXECUTE path.
--- Auto Execute (settings.AutoExecute) gates whether this runs on
--- character spawn. Manual apply paths (Wear Selected / Wear All /
--- card Wear button) remain unchanged and are unaffected by this flag.
+-- Existing execute path (originally "auto equip"). Auto Execute simply
+-- calls this once at startup — no second engine is introduced.
 local function initAutoEquip(char)
 	if not char then return end
 	task.spawn(function()
@@ -568,7 +565,6 @@ createCorner(mf, R_MAIN)
 applyCoolGradient(mf)
 createStroke(mf, C.stroke, 1, 0.15, "stroke")
 
--- UI Scale
 local uiScaleObj = Instance.new("UIScale", mf)
 uiScaleObj.Scale = math.clamp((settings.UIScale or 100) / 100, 0.5, 2.0)
 
@@ -674,7 +670,7 @@ local closeWindowBtn = createButton(headerBar, {
 
 -- ---------- minimize / restore helpers ----------
 
-local settingsOverlay -- forward decl (created below)
+local settingsOverlay
 
 local function minimizeGUI()
 	if not mf.Visible then return end
@@ -904,7 +900,6 @@ gridBtnLayout.CellSize, gridBtnLayout.CellPadding = UDim2.new(0, btnW, 0, s(21))
 local actRow = Instance.new("Frame", rp)
 actRow.Size, actRow.Position, actRow.BackgroundTransparency = UDim2.new(1, 0, 0, s(64)), UDim2.new(0, 0, 1, -s(64)), 1
 
--- [SAVE] [SETTINGS] row
 local bookmarkBtn = createButton(actRow, {
 	uiSize = UDim2.new(0.6, -s(2), 0, s(24)), pos = UDim2.new(0, 0, 0, 0),
 	text = "Save to Saved Tab", bgKey = "panel", bgTransparency = 0.05, textKey = "textMuted",
@@ -1041,11 +1036,6 @@ local function refreshAllSettingsUI()
 		pcall(fn)
 	end
 end
-
--- Forward decl for update loop restart
-local restartUpdateLoop
-
--- -- Row factories ---------------------------------------------
 
 local function makeRowBase(order)
 	local row = Instance.new("Frame", spScroller)
@@ -1198,17 +1188,9 @@ local function makeActionRow(order, labelText, buttonText, onClick)
 	return row
 end
 
--- -- Rows ------------------------------------------------------
-
-makeToggleRow(1, "Auto Execute", "AutoExecute", function(v)
-	if v and lp.Character then
-		-- If user turns Auto Execute ON and the current character
-		-- hasn't been initialized yet, run it now.
-		if executionState.completedFor ~= lp.Character then
-			triggerAutoExecute(lp.Character)
-		end
-	end
-end)
+-- Auto Execute is a startup-only ceremony.
+-- Toggling it mid-session does not re-run it (spec: startup only).
+makeToggleRow(1, "Auto Execute", "AutoExecute")
 makeToggleRow(2, "Wait for Character", "WaitForCharacter")
 makeCycleRow(3, "Startup Delay", "StartupDelay",
 	{0, 1, 2, 3},
@@ -1245,7 +1227,7 @@ makeActionRow(11, "Animation Cache", "CLEAR", function(btn)
 	local original = btn.Text
 	btn.Text = "Clearing..."
 	task.spawn(function()
-		local ok, err = pcall(clearAllAnimationCache)
+		local ok = pcall(clearAllAnimationCache)
 		if ok then
 			btn.Text = "Cleared"
 		else
@@ -1281,7 +1263,6 @@ makeActionRow(12, "Reset All Settings", "RESET", function(btn)
 	end
 end)
 
--- Open / close
 settingsOpenBtn.MouseButton1Click:Connect(function()
 	settingsOverlay.Visible = true
 end)
@@ -1307,13 +1288,6 @@ local userSelectedAnimSlot = settings.LastSelectedSlot or "idleanimation"
 local executeSearch
 local refreshTabVisuals
 local refreshAnimButtonVisuals
-local triggerAutoExecute
-
--- Auto Execute state
-local executionState = {
-	inProgress = false,
-	completedFor = nil,
-}
 
 -- ============================================================
 -- LOGIC
@@ -1606,7 +1580,6 @@ local function inspectBundleDetails(bundleId, bundleName)
 	wearSelectedBtn.Visible, wearAllBtn.Visible = false, false
 	activeBundleName, activeBundleId = bundleName or "Unknown", bundleId
 
-	-- Remember selected bundle (used by Auto Apply Selected)
 	settings.LastSelectedBundleId = bundleId
 	settings.LastSelectedBundleName = bundleName
 	saveSettings()
@@ -1719,7 +1692,6 @@ local function drawGridPage(dataList)
 		local bundle = dataList[i]
 		if not bundle then break end
 
-		-- Must stay ViewportFrame for buildViewportSkeleton
 		local box = Instance.new("ViewportFrame", gridScroller)
 		box.BackgroundColor3, box.BackgroundTransparency, box.BorderSizePixel = C.panel, 0.05, 0
 		tagTheme(box, "BackgroundColor3", "panel")
@@ -1977,24 +1949,34 @@ searchBtn.MouseButton1Click:Connect(function() executeSearch(sb.Text) end)
 sb.FocusLost:Connect(function(enterPressed) if enterPressed then executeSearch(sb.Text) end end)
 
 -- ============================================================
--- AUTO EXECUTE SYSTEM
+-- AUTO EXECUTE SYSTEM (STARTUP-ONLY)
 -- ============================================================
+--
+-- Behaviour:
+--   * Runs ONCE per script session (per game join).
+--   * Uses the existing execute path (initAutoEquip + optional apply).
+--   * CharacterAdded is used ONLY to wait for the FIRST character;
+--     the temporary listener is disconnected immediately.
+--   * Respawn does NOT re-run Auto Execute.
+--   * Rejoin creates a new session → Auto Execute runs again.
+--
+-- Guard:
+--   startupAutoExecuted is session-local; it prevents duplicate runs.
 
 triggerAutoExecute = function(char)
 	if not char then return end
+	if startupAutoExecuted then return end
 	if not settings.AutoExecute then return end
 	if executionState.inProgress then return end
-	if executionState.completedFor == char then return end
 
 	executionState.inProgress = true
 
 	task.spawn(function()
-		local ok, err = pcall(function()
-			-- 1) Wait for dependencies
+		local ok = pcall(function()
+			-- 1) Wait for required dependencies on the FIRST character.
 			if settings.WaitForCharacter then
 				local human = char:WaitForChild("Humanoid", 10)
 				if not human then return end
-				-- Animator is optional but wait up to 3s
 				local animator = human:FindFirstChildOfClass("Animator")
 				if not animator then
 					local deadline = tick() + 3
@@ -2005,16 +1987,14 @@ triggerAutoExecute = function(char)
 				end
 			end
 
-			-- 2) Startup delay
+			-- 2) Optional startup delay.
 			local delay = tonumber(settings.StartupDelay) or 0
-			if delay > 0 then
-				task.wait(delay)
-			end
+			if delay > 0 then task.wait(delay) end
 
-			-- 3) Run existing auto-equip path
+			-- 3) Run the existing execute path.
 			initAutoEquip(char)
 
-			-- 4) Auto apply last selected bundle
+			-- 4) Auto Apply Selected (last selected bundle).
 			if settings.RememberSelectedAnimation and settings.AutoApplySelected
 				and settings.LastSelectedBundleId then
 				local applyOk, res = pcall(function()
@@ -2041,7 +2021,12 @@ triggerAutoExecute = function(char)
 		executionState.completedFor = char
 		executionState.inProgress = false
 
-		-- 5) Auto minimize (only on successful init)
+		if ok then
+			-- Mark this SESSION as auto-executed. Respawn must not re-trigger.
+			startupAutoExecuted = true
+		end
+
+		-- 5) Optional auto minimize — only on success.
 		if ok and settings.AutoMinimize then
 			task.wait(0.2)
 			minimizeGUI()
@@ -2049,29 +2034,47 @@ triggerAutoExecute = function(char)
 	end)
 end
 
--- Character respawn handling
-local function onCharacterAdded(char)
-	-- Reset per-character state for the new character
-	executionState.completedFor = nil
-	executionState.inProgress = false
-	if settings.AutoExecute then
-		triggerAutoExecute(char)
-	end
+-- Startup: run Auto Execute ONCE for this session.
+-- A temporary CharacterAdded listener is used ONLY if the character
+-- isn't ready yet; it is disconnected as soon as it fires once.
+if settings.AutoExecute then
+	task.spawn(function()
+		if lp.Character then
+			triggerAutoExecute(lp.Character)
+			return
+		end
+
+		-- Wait for the FIRST character only.
+		local firstCharConn
+		local fired = false
+		firstCharConn = lp.CharacterAdded:Connect(function(c)
+			if fired then return end
+			fired = true
+			if firstCharConn then
+				firstCharConn:Disconnect()
+				firstCharConn = nil
+			end
+			if not startupAutoExecuted then
+				triggerAutoExecute(c)
+			end
+		end)
+
+		-- Belt-and-suspenders: cover the race where the character became
+		-- available between the check above and the Connect call.
+		if lp.Character and not fired and not startupAutoExecuted then
+			fired = true
+			if firstCharConn then
+				firstCharConn:Disconnect()
+				firstCharConn = nil
+			end
+			triggerAutoExecute(lp.Character)
+		end
+	end)
 end
 
--- Initial execution
-if lp.Character then
-	if settings.AutoExecute then
-		task.spawn(function() triggerAutoExecute(lp.Character) end)
-	end
-else
-	lp.CharacterAdded:Wait()
-	if settings.AutoExecute then
-		task.spawn(function() triggerAutoExecute(lp.Character) end)
-	end
-end
-
-lp.CharacterAdded:Connect(onCharacterAdded)
+-- IMPORTANT:
+-- There is NO permanent CharacterAdded listener that runs Auto Execute.
+-- Respawn keeps the script running but does NOT re-run the startup ceremony.
 
 -- ============================================================
 -- AUTO UPDATE LOOP
@@ -2119,7 +2122,6 @@ applyTheme = function(newTheme, skipSave)
 	Theme = newTheme
 	syncC()
 
-	-- 1) Update all tagged properties
 	for _, d in ipairs(g:GetDescendants()) do
 		local okAttrs, attrs = pcall(function() return d:GetAttributes() end)
 		if okAttrs and attrs then
@@ -2142,7 +2144,6 @@ applyTheme = function(newTheme, skipSave)
 		end
 	end
 
-	-- 2) Cool gradients
 	for _, d in ipairs(g:GetDescendants()) do
 		if d:IsA("UIGradient") and d.Name == "CoolGrad" then
 			d.Color = ColorSequence.new({
@@ -2153,15 +2154,12 @@ applyTheme = function(newTheme, skipSave)
 		end
 	end
 
-	-- 3) State-dependent visuals
 	if refreshTabVisuals then refreshTabVisuals() end
 	if refreshAnimButtonVisuals then refreshAnimButtonVisuals() end
 	refreshBookmarkBtn()
 
-	-- 4) Theme button
 	themeBtn.Text = (Theme == "Dark") and "LIGHT" or "DARK"
 
-	-- 5) Shimmer gradients
 	for _, d in ipairs(g:GetDescendants()) do
 		if d:IsA("UIGradient") and d.Name == "ShimmerGrad" then
 			d.Color = ColorSequence.new({
@@ -2172,7 +2170,6 @@ applyTheme = function(newTheme, skipSave)
 		end
 	end
 
-	-- 6) Persist
 	if not skipSave then
 		writeThemeToFiles(Theme)
 	end
@@ -2224,7 +2221,6 @@ local function attachDrag(dragTarget, moveTarget, isMinimized)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch then
 			if active and not moved and isMinimized then
-				-- treat as click
 				if not UI_BUSY then
 					UI_BUSY = true
 					restoreGUI()
@@ -2249,7 +2245,6 @@ themeBtn.Text = (Theme == "Dark") and "LIGHT" or "DARK"
 refreshTabVisuals()
 refreshBookmarkBtn()
 
--- Restore last selected slot into UI selection state
 if settings.RememberSelectedAnimation and settings.LastSelectedSlot then
 	userSelectedAnimSlot = settings.LastSelectedSlot
 end
