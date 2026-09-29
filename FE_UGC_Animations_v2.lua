@@ -1,3 +1,33 @@
+--[[
+    FE UGC ANIMATIONS v2.3.0
+    Universal Animation Manager
+    Made By @in66ar
+
+    v2.3.0 CHANGES:
+      - Settings panel (button next to Save)
+      - Auto Execute (ON/OFF, default ON)
+      - Wait for Character (ON/OFF, default ON)
+      - Startup Delay (0s / 1s / 2s / 3s, default 0s)
+      - Remember Selected Animation (ON/OFF, default ON)
+      - Auto Apply Selected (ON/OFF, default ON)
+      - Auto Minimize (ON/OFF, default OFF)
+      - Auto Update + Update Interval (30s / 1m / 5m / Manual, default 1m)
+      - Clear Animation Cache
+      - UI Scale (90% / 100% / 110%, default 100%)
+      - Remember Last Tab (ON/OFF, default ON)
+      - Settings persistence (FeUgcAnim_Settings.json)
+      - Reset Settings
+      - Custom drag for minimized pill + main window header
+      - Guarded auto-execute (no duplicate execution)
+      - Character respawn handling
+
+    v2.2.0 / v2.1.0 / v2.0.0 features preserved:
+      - Discover, Saved, Search, Clear, Bookmark, Preview,
+        Wear Selected, Wear All, Auto Equip, Cache, Pagination,
+        Dark/Light theme, theme persistence, floating GUI,
+        minimize, close.
+]]
+
 local plrs = game:GetService("Players")
 local as = game:GetService("AssetService")
 local aes = game:GetService("AvatarEditorService")
@@ -5,6 +35,7 @@ local rs = game:GetService("RunService")
 local hs = game:GetService("HttpService")
 local cp = game:GetService("ContentProvider")
 local ts = game:GetService("TweenService")
+local uis = game:GetService("UserInputService")
 local lp = plrs.LocalPlayer
 
 local m = {
@@ -41,25 +72,29 @@ local buttonOrder = {
 }
 
 -- Safe unicode icon bytes, built via string.char so the source file's own
--- encoding can never corrupt these glyphs (avoids the "mojibake" issue).
+-- encoding can never corrupt these glyphs.
 local function uchr(...) return string.char(...) end
-local ICO_BACK      = uchr(226,134,144) -- ←
-local ICO_NEXT      = uchr(226,134,146) -- →
-local ICO_STAR_ON   = uchr(226,152,133) -- ★
-local ICO_STAR_OFF  = uchr(226,152,134) -- ☆
-local ICO_CHECK     = uchr(226,156,147) -- ✓
-local ICO_PLAY      = uchr(226,150,182) -- ▶
-local ICO_DOTS      = uchr(226,128,166) -- …
-local ICO_DOT       = uchr(226,128,162) -- •
+local ICO_BACK      = uchr(226,134,144)
+local ICO_NEXT      = uchr(226,134,146)
+local ICO_STAR_ON   = uchr(226,152,133)
+local ICO_STAR_OFF  = uchr(226,152,134)
+local ICO_CHECK     = uchr(226,156,147)
+local ICO_PLAY      = uchr(226,150,182)
+local ICO_DOTS      = uchr(226,128,166)
+local ICO_DOT       = uchr(226,128,162)
+-- Clear button deliberately uses ASCII "X".
 
 local CACHE_FILE_NAME = "animation_bundle_data_cache.json"
 local ANIM_CACHE_URL = "https://raw.githubusercontent.com/TribalFootball/TuffTeto/main/animation_bundle_data_cache.json"
 local SEEN_BUNDLES_FILE = "seen_anim_bundles_cache.json"
 local EQUIPPED_FILE = "FeUgcAnim.json"
 local SAVED_BUNDLES_FILE = "FeUgcAnim_Bookmarks.json"
+local THEME_FILE = "FE_UGC_Animations_Theme.json"
+local SETTINGS_FILE = "FeUgcAnim_Settings.json"
 
-local assetCache, fileCache, seenBundles, equippedAnims = {}, {}, {}, {}
-local savedBookmarks = {}
+-- ============================================================
+-- JSON / FILESYSTEM HELPERS
+-- ============================================================
 
 local function loadJSON(file)
 	local ok, content = pcall(function()
@@ -77,21 +112,138 @@ local function saveJSON(file, data)
 	pcall(function() writefile(file, hs:JSONEncode(data)) end)
 end
 
+-- ============================================================
+-- SETTINGS SYSTEM
+-- ============================================================
+
+local DEFAULT_SETTINGS = {
+	AutoExecute                = true,
+	WaitForCharacter           = true,
+	StartupDelay               = 0,
+	RememberSelectedAnimation  = true,
+	AutoApplySelected          = true,
+	AutoMinimize               = false,
+	AutoUpdate                 = true,
+	UpdateInterval             = 60,
+	UIScale                    = 100,
+	RememberLastTab            = true,
+	LastTab                    = "Discover",
+	LastSelectedSlot           = "idleanimation",
+	LastSelectedBundleId       = nil,
+	LastSelectedBundleName     = nil,
+}
+
+local settings = loadJSON(SETTINGS_FILE)
+if type(settings) ~= "table" then settings = {} end
+for k, v in pairs(DEFAULT_SETTINGS) do
+	if settings[k] == nil then settings[k] = v end
+end
+
+local function saveSettings()
+	saveJSON(SETTINGS_FILE, settings)
+end
+
+-- ============================================================
+-- THEME SYSTEM
+-- ============================================================
+
+local Themes = {
+	Dark = {
+		bg         = Color3.fromRGB(17, 18, 20),
+		panel      = Color3.fromRGB(23, 24, 27),
+		surface    = Color3.fromRGB(30, 31, 35),
+		surfaceHi  = Color3.fromRGB(40, 41, 45),
+		stroke     = Color3.fromRGB(55, 56, 61),
+		accent     = Color3.fromRGB(185, 188, 193),
+		accentDim  = Color3.fromRGB(105, 108, 114),
+		green      = Color3.fromRGB(135, 165, 145),
+		fav        = Color3.fromRGB(190, 170, 115),
+		text       = Color3.fromRGB(238, 238, 236),
+		textDim    = Color3.fromRGB(165, 166, 169),
+		textMuted  = Color3.fromRGB(105, 106, 110),
+		subtitle   = Color3.fromRGB(125, 126, 130),
+		overlay    = Color3.fromRGB(10, 11, 13),
+		onAccent   = Color3.fromRGB(20, 22, 26),
+	},
+	Light = {
+		bg         = Color3.fromRGB(245, 245, 243),
+		panel      = Color3.fromRGB(238, 238, 236),
+		surface    = Color3.fromRGB(230, 230, 228),
+		surfaceHi  = Color3.fromRGB(218, 218, 215),
+		stroke     = Color3.fromRGB(200, 200, 197),
+		accent     = Color3.fromRGB(75, 77, 80),
+		accentDim  = Color3.fromRGB(125, 127, 130),
+		green      = Color3.fromRGB(95, 130, 108),
+		fav        = Color3.fromRGB(145, 125, 75),
+		text       = Color3.fromRGB(25, 26, 28),
+		textDim    = Color3.fromRGB(90, 91, 94),
+		textMuted  = Color3.fromRGB(135, 136, 139),
+		subtitle   = Color3.fromRGB(105, 106, 109),
+		overlay    = Color3.fromRGB(235, 235, 232),
+		onAccent   = Color3.fromRGB(245, 245, 243),
+	}
+}
+
+local function readThemeFromFiles()
+	-- Prefer settings file, fall back to legacy theme file
+	local t = settings.Theme
+	if t ~= "Dark" and t ~= "Light" then
+		local ok, content = pcall(function()
+			if isfile and not isfile(THEME_FILE) then return nil end
+			return readfile(THEME_FILE)
+		end)
+		if ok and content then
+			local suc, decoded = pcall(function() return hs:JSONDecode(content) end)
+			if suc and decoded and type(decoded) == "table" then
+				if decoded.theme == "Dark" or decoded.theme == "Light" then
+					t = decoded.theme
+				end
+			end
+		end
+	end
+	if t ~= "Dark" and t ~= "Light" then t = "Dark" end
+	return t
+end
+
+local function writeThemeToFiles(themeName)
+	pcall(function()
+		if writefile then
+			writefile(THEME_FILE, hs:JSONEncode({theme = themeName}))
+		end
+	end)
+	settings.Theme = themeName
+	saveSettings()
+end
+
+local Theme = readThemeFromFiles()
+
+-- C is the single source of truth for current theme colors.
+local C = {}
+local function syncC()
+	for k, v in pairs(Themes[Theme]) do
+		C[k] = v
+	end
+end
+syncC()
+
+-- ============================================================
+-- CACHE STATE
+-- ============================================================
+
+local assetCache, fileCache, seenBundles, equippedAnims = {}, {}, {}, {}
+local savedBookmarks = {}
+
 fileCache = loadJSON(CACHE_FILE_NAME)
 seenBundles = loadJSON(SEEN_BUNDLES_FILE)
 equippedAnims = loadJSON(EQUIPPED_FILE)
 savedBookmarks = loadJSON(SAVED_BUNDLES_FILE)
+if type(equippedAnims) ~= "table" then equippedAnims = {} end
+if type(savedBookmarks) ~= "table" then savedBookmarks = {} end
+if type(fileCache) ~= "table" then fileCache = {} end
 
-task.spawn(function()
-	local ok, onlineContent = pcall(function() return game:HttpGet(ANIM_CACHE_URL) end)
-	if ok and onlineContent then
-		pcall(function()
-			local onlineData = hs:JSONDecode(onlineContent)
-			for k, v in pairs(onlineData) do if not fileCache[k] then fileCache[k] = v end end
-			saveJSON(CACHE_FILE_NAME, fileCache)
-		end)
-	end
-end)
+-- ============================================================
+-- ANIMATION HELPERS
+-- ============================================================
 
 local function applySavedAnimations(char)
 	if not char then return end
@@ -107,7 +259,7 @@ local function applySavedAnimations(char)
 
 	for slotType, animList in pairs(equippedAnims) do
 		local fId = m[string.lower(slotType)]
-		if fId then
+		if fId and type(animList) == "table" then
 			local folder = animate:FindFirstChild(fId)
 			if folder then
 				for _, o in ipairs(folder:GetChildren()) do
@@ -126,6 +278,10 @@ local function applySavedAnimations(char)
 	animate.Disabled = false
 end
 
+-- The existing "initAutoEquip" is the script's implicit EXECUTE path.
+-- Auto Execute (settings.AutoExecute) gates whether this runs on
+-- character spawn. Manual apply paths (Wear Selected / Wear All /
+-- card Wear button) remain unchanged and are unaffected by this flag.
 local function initAutoEquip(char)
 	if not char then return end
 	task.spawn(function()
@@ -143,12 +299,6 @@ local function initAutoEquip(char)
 		end
 	end)
 end
-
-if lp.Character then
-	initAutoEquip(lp.Character)
-end
-
-lp.CharacterAdded:Connect(initAutoEquip)
 
 local function get(id, bundleId, assetType)
 	local stringId = tostring(id)
@@ -228,32 +378,30 @@ local function clearAssetCache(id)
 	saveJSON(CACHE_FILE_NAME, fileCache)
 end
 
+local function clearAllAnimationCache()
+	for k in pairs(assetCache) do assetCache[k] = nil end
+	for k in pairs(fileCache) do fileCache[k] = nil end
+	pcall(function()
+		if isfile and isfile(CACHE_FILE_NAME) then
+			delfile(CACHE_FILE_NAME)
+		end
+	end)
+end
+
 -- ============================================================
 -- UI FOUNDATION
 -- ============================================================
 
 local vp = workspace.CurrentCamera.ViewportSize
-local scale = math.clamp(math.min(vp.X / 1920, vp.Y / 1080), 0.55, 3.0) * 1.45
-local function s(n) return math.round(n * scale) end
+local baseScale = math.clamp(math.min(vp.X / 1920, vp.Y / 1080), 0.55, 3.0) * 1.45
+local function s(n) return math.round(n * baseScale) end
 
--- Premium cool-gray palette (subtle, low-saturation accent)
-local C = {
-	bg         = Color3.fromRGB(22, 24, 28),
-	panel      = Color3.fromRGB(30, 33, 38),
-	surface    = Color3.fromRGB(38, 41, 47),
-	surfaceHi  = Color3.fromRGB(52, 56, 63),
-	stroke     = Color3.fromRGB(60, 64, 71),
-	accent     = Color3.fromRGB(150, 165, 235),
-	accentDim  = Color3.fromRGB(95, 105, 150),
-	green      = Color3.fromRGB(120, 190, 150),
-	purple     = Color3.fromRGB(160, 140, 205),
-	text       = Color3.fromRGB(238, 240, 243),
-	textDim    = Color3.fromRGB(160, 165, 173),
-	textMuted  = Color3.fromRGB(103, 108, 116),
-	subtitle   = Color3.fromRGB(112, 117, 126),
-	overlay    = Color3.fromRGB(14, 16, 19),
-	fav        = Color3.fromRGB(255, 205, 90)
-}
+local R_MAIN    = s(12)
+local R_PANEL   = s(8)
+local R_CARD    = s(8)
+local R_BUTTON  = s(6)
+local R_INPUT   = s(6)
+local R_SMALL   = s(4)
 
 local PAD_TOP = s(44)
 local PAD_SIDES = s(14)
@@ -269,8 +417,6 @@ local MIN_BTN_SIZE = s(60)
 local UI_BUSY = false
 local TOGGLE_COOLDOWN = 0.15
 
--- ---------- helpers ----------
-
 local function tween(obj, props, duration, style, direction)
 	local info = TweenInfo.new(duration or 0.18, style or Enum.EasingStyle.Quad, direction or Enum.EasingDirection.Out)
 	local t = ts:Create(obj, info, props)
@@ -280,33 +426,50 @@ end
 
 local function createCorner(parent, radius)
 	local cr = Instance.new("UICorner", parent)
-	cr.CornerRadius = UDim.new(0, radius or s(6))
+	cr.CornerRadius = UDim.new(0, radius or R_SMALL)
 	return cr
 end
 
-local function createStroke(parent, color, thickness, transparency)
+local function createStroke(parent, color, thickness, transparency, themeKey)
 	local st = Instance.new("UIStroke", parent)
 	st.Color = color or C.stroke
 	st.Thickness = thickness or 1
 	st.Transparency = transparency or 0
+	if themeKey then
+		st:SetAttribute("_tk_Color", themeKey)
+		if C[themeKey] then
+			pcall(function() st.Color = C[themeKey] end)
+		end
+	end
 	return st
 end
 
-local function corner(parent, radius) return createCorner(parent, radius) end
-local function stroke(parent, color, thickness) return createStroke(parent, color, thickness) end
+local function tagTheme(inst, prop, key)
+	if not inst or not prop or not key then return inst end
+	inst:SetAttribute("_tk_" .. prop, key)
+	if C[key] then
+		pcall(function() inst[prop] = C[key] end)
+	end
+	return inst
+end
 
 local function applyCoolGradient(parent)
+	local existing = parent:FindFirstChild("CoolGrad")
+	if existing then existing:Destroy() end
 	local grad = Instance.new("UIGradient", parent)
+	grad.Name = "CoolGrad"
 	grad.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(48, 52, 59)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(28, 31, 36)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 20, 24))
+		ColorSequenceKeypoint.new(0, C.surface),
+		ColorSequenceKeypoint.new(0.5, C.panel),
+		ColorSequenceKeypoint.new(1, C.bg)
 	})
 	grad.Rotation = 60
+	return grad
 end
 
 local function applyShimmer(obj, colorStart, colorMid)
-	if obj:FindFirstChild("ShimmerGrad") then return end
+	local existing = obj:FindFirstChild("ShimmerGrad")
+	if existing then existing:Destroy() end
 	local grad = Instance.new("UIGradient", obj)
 	grad.Name = "ShimmerGrad"
 	grad.Color = ColorSequence.new({
@@ -326,8 +489,6 @@ local function removeShimmer(obj)
 	if g2 then g2:Destroy() end
 end
 
--- Generic label/button/card factories (per request: reusable creation helpers)
-
 local function createLabel(parent, props)
 	local lbl = Instance.new("TextLabel", parent)
 	lbl.BackgroundTransparency = 1
@@ -339,6 +500,9 @@ local function createLabel(parent, props)
 	lbl.Size = props.uiSize or UDim2.new(1, 0, 1, 0)
 	lbl.Position = props.pos or UDim2.new(0, 0, 0, 0)
 	lbl.ClipsDescendants = true
+	if props.textKey then
+		tagTheme(lbl, "TextColor3", props.textKey)
+	end
 	return lbl
 end
 
@@ -354,28 +518,30 @@ local function createButton(parent, props)
 	btn.TextSize = props.size or s(11)
 	btn.ClipsDescendants = true
 	btn.AutoButtonColor = false
-	createCorner(btn, props.radius or s(6))
-	if props.strokeColor then createStroke(btn, props.strokeColor, 1) end
+	createCorner(btn, props.radius or R_BUTTON)
+	if props.strokeColor or props.strokeKey then
+		createStroke(btn, props.strokeColor or C.stroke, 1, nil, props.strokeKey)
+	end
 
-	local baseColor = btn.BackgroundColor3
-	local hoverColor = props.hoverBg or baseColor:Lerp(Color3.new(1,1,1), 0.08)
-	btn.MouseEnter:Connect(function() tween(btn, {BackgroundColor3 = hoverColor}, 0.12) end)
-	btn.MouseLeave:Connect(function() tween(btn, {BackgroundColor3 = baseColor}, 0.12) end)
+	if props.bgKey then tagTheme(btn, "BackgroundColor3", props.bgKey) end
+	if props.textKey then tagTheme(btn, "TextColor3", props.textKey) end
+
+	local function getBase()
+		if props.bgKey and C[props.bgKey] then return C[props.bgKey] end
+		return props.bg or C.surfaceHi
+	end
+
+	btn.MouseEnter:Connect(function()
+		local target = props.hoverBg or getBase():Lerp(Color3.new(1,1,1), 0.06)
+		tween(btn, {BackgroundColor3 = target}, 0.12)
+	end)
+	btn.MouseLeave:Connect(function()
+		tween(btn, {BackgroundColor3 = getBase()}, 0.12)
+	end)
 	btn.MouseButton1Down:Connect(function() tween(btn, {Size = (props.uiSize or btn.Size) - UDim2.new(0,0,0,1)}, 0.06) end)
 	btn.MouseButton1Up:Connect(function() tween(btn, {Size = props.uiSize or btn.Size}, 0.08) end)
 
 	return btn
-end
-
-local function createCard(parent, props)
-	local card = Instance.new("Frame", parent)
-	card.Size = props.uiSize or UDim2.new(0, s(80), 0, s(80))
-	card.Position = props.pos or UDim2.new(0, 0, 0, 0)
-	card.BackgroundColor3 = props.bg or C.panel
-	card.BackgroundTransparency = props.bgTransparency or 0
-	createCorner(card, props.radius or s(8))
-	if props.strokeColor ~= false then createStroke(card, props.strokeColor or C.stroke, 1) end
-	return card
 end
 
 -- ============================================================
@@ -388,16 +554,23 @@ if gp:FindFirstChild("StudioAnimStudio") then gp.StudioAnimStudio:Destroy() end
 local g = Instance.new("ScreenGui", gp)
 g.Name = "StudioAnimStudio"
 g.ResetOnSpawn = false
+g.IgnoreGuiInset = true
 if not g.Parent then g.Parent = lp:WaitForChild("PlayerGui") end
 
 local mf = Instance.new("CanvasGroup", g)
+mf.Name = "MainFrame"
 mf.Size, mf.Position, mf.AnchorPoint = UDim2.new(0, 0, 0, 0), UDim2.new(0.5, 0, 0.5, 0), Vector2.new(0.5, 0.5)
-mf.BackgroundColor3, mf.BackgroundTransparency = C.bg, 0.05
+mf.BackgroundColor3, mf.BackgroundTransparency = C.bg, 0.02
 mf.GroupTransparency = 1
-mf.Active, mf.Draggable = true, true
-createCorner(mf, s(12))
+mf.Active = true
+tagTheme(mf, "BackgroundColor3", "bg")
+createCorner(mf, R_MAIN)
 applyCoolGradient(mf)
-createStroke(mf, C.stroke, 1, 0.2)
+createStroke(mf, C.stroke, 1, 0.15, "stroke")
+
+-- UI Scale
+local uiScaleObj = Instance.new("UIScale", mf)
+uiScaleObj.Scale = math.clamp((settings.UIScale or 100) / 100, 0.5, 2.0)
 
 local mfPad = Instance.new("UIPadding", mf)
 mfPad.PaddingTop = UDim.new(0, PAD_TOP)
@@ -412,41 +585,27 @@ end)
 -- ---------- minimized pill ----------
 
 local minBtn = Instance.new("CanvasGroup", g)
+minBtn.Name = "MinButton"
 minBtn.Size, minBtn.Position, minBtn.AnchorPoint = UDim2.new(0, 0, 0, 0), UDim2.new(1, -s(40), 0, s(30)), Vector2.new(0.5, 0.5)
 minBtn.BackgroundTransparency = 1
 minBtn.GroupTransparency = 1
 minBtn.Visible = false
-minBtn.Active, minBtn.Draggable, minBtn.ClipsDescendants = true, true, true
+minBtn.Active, minBtn.ClipsDescendants = true, true
 
 local minBtnBg = Instance.new("Frame", minBtn)
 minBtnBg.Size, minBtnBg.BackgroundColor3, minBtnBg.BorderSizePixel = UDim2.new(1, 0, 1, 0), C.panel, 0
+tagTheme(minBtnBg, "BackgroundColor3", "panel")
 local minBtnCorner = Instance.new("UICorner", minBtnBg)
 minBtnCorner.CornerRadius = UDim.new(0.5, 0)
-local minBtnStroke = createStroke(minBtnBg, C.accentDim, 1, 0.15)
+local minBtnStroke = createStroke(minBtnBg, C.stroke, 1, 0.2, "stroke")
 applyCoolGradient(minBtnBg)
 
 local minBtnLabel = createLabel(minBtn, {
-	text = "UGC", font = Enum.Font.GothamBlack, size = s(13), color = C.text
+	text = "UGC", font = Enum.Font.GothamBlack, size = s(13), textKey = "text"
 })
 
 local minBtnHit = Instance.new("TextButton", minBtn)
 minBtnHit.Size, minBtnHit.BackgroundTransparency, minBtnHit.Text, minBtnHit.ClipsDescendants = UDim2.new(1, 0, 1, 0), 1, "", true
-
-minBtnHit.MouseButton1Click:Connect(function()
-	if UI_BUSY then return end
-	UI_BUSY = true
-
-	minBtn.Visible = false
-	minBtn.GroupTransparency = 1
-	minBtn.Size = UDim2.new(0, 0, 0, 0)
-
-	mf.Size = UDim2.new(0, W, 0, H)
-	mf.GroupTransparency = 0
-	mf.Visible = true
-
-	task.wait(TOGGLE_COOLDOWN)
-	UI_BUSY = false
-end)
 
 -- ---------- header ----------
 
@@ -454,42 +613,89 @@ local headerBar = Instance.new("Frame", mf)
 headerBar.Size = UDim2.new(1, 0, 0, PAD_TOP - s(6))
 headerBar.Position = UDim2.new(0, 0, 0, -PAD_TOP)
 headerBar.BackgroundTransparency = 1
+headerBar.Active = true
 
 local titleLbl = createLabel(headerBar, {
 	text = "FE UGC ANIMATIONS",
 	font = Enum.Font.GothamBlack,
 	size = s(16),
-	color = C.text,
 	align = Enum.TextXAlignment.Left,
-	uiSize = UDim2.new(1, -s(70), 0, s(17)),
-	pos = UDim2.new(0, s(2), 0, s(2))
+	uiSize = UDim2.new(1, -s(170), 0, s(17)),
+	pos = UDim2.new(0, s(2), 0, s(2)),
+	textKey = "text"
 })
 
 local subtitleLbl = createLabel(headerBar, {
-	text = "by @in66ar",
+	text = "by @in66ar v2.3.0",
 	font = Enum.Font.GothamMedium,
-	size = s(12),
-	color = C.subtitle,
+	size = s(11),
 	align = Enum.TextXAlignment.Left,
-	uiSize = UDim2.new(1, -s(70), 0, s(15)),
-	pos = UDim2.new(0, s(2), 0, s(20))
+	uiSize = UDim2.new(1, -s(170), 0, s(15)),
+	pos = UDim2.new(0, s(2), 0, s(20)),
+	textKey = "subtitle"
+})
+
+local themeBtn = createButton(headerBar, {
+	uiSize = UDim2.new(0, s(50), 0, s(24)),
+	pos = UDim2.new(1, -s(106), 0, s(2)),
+	bgKey = "surface",
+	bgTransparency = 0.25,
+	text = (Theme == "Dark") and "LIGHT" or "DARK",
+	textKey = "textDim",
+	font = Enum.Font.GothamBold,
+	size = s(9),
+	radius = R_BUTTON
 })
 
 local minWindowBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, s(24), 0, s(24)),
 	pos = UDim2.new(1, -s(52), 0, s(2)),
-	bg = C.surfaceHi, bgTransparency = 0.3,
-	text = "-", color = C.textDim, font = Enum.Font.GothamBold, size = s(16),
-	radius = s(6)
+	bgKey = "surface",
+	bgTransparency = 0.25,
+	text = "-",
+	textKey = "textDim",
+	font = Enum.Font.GothamBold,
+	size = s(16),
+	radius = R_BUTTON
 })
 
 local closeWindowBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, s(24), 0, s(24)),
 	pos = UDim2.new(1, -s(24), 0, s(2)),
-	bg = C.surfaceHi, bgTransparency = 0.3,
-	text = "X", color = C.textDim, font = Enum.Font.GothamBold, size = s(13),
-	radius = s(6), hoverBg = Color3.fromRGB(120, 70, 70)
+	bgKey = "surface",
+	bgTransparency = 0.25,
+	text = "X",
+	textKey = "textDim",
+	font = Enum.Font.GothamBold,
+	size = s(12),
+	radius = R_BUTTON,
+	hoverBg = Color3.fromRGB(70, 45, 45)
 })
+
+-- ---------- minimize / restore helpers ----------
+
+local settingsOverlay -- forward decl (created below)
+
+local function minimizeGUI()
+	if not mf.Visible then return end
+	mf.Visible = false
+	mf.GroupTransparency = 1
+	mf.Size = UDim2.new(0, 0, 0, 0)
+	minBtn.Size = UDim2.new(0, MIN_BTN_SIZE, 0, MIN_BTN_SIZE)
+	minBtn.GroupTransparency = 0
+	minBtn.Visible = true
+	if settingsOverlay then settingsOverlay.Visible = false end
+end
+
+local function restoreGUI()
+	if mf.Visible then return end
+	minBtn.Visible = false
+	minBtn.GroupTransparency = 1
+	minBtn.Size = UDim2.new(0, 0, 0, 0)
+	mf.Size = UDim2.new(0, W, 0, H)
+	mf.GroupTransparency = 0
+	mf.Visible = true
+end
 
 closeWindowBtn.MouseButton1Click:Connect(function()
 	tween(mf, {GroupTransparency = 1, Size = UDim2.new(0,0,0,0)}, 0.2)
@@ -500,15 +706,7 @@ end)
 minWindowBtn.MouseButton1Click:Connect(function()
 	if UI_BUSY then return end
 	UI_BUSY = true
-
-	mf.Visible = false
-	mf.GroupTransparency = 1
-	mf.Size = UDim2.new(0, 0, 0, 0)
-
-	minBtn.Size = UDim2.new(0, MIN_BTN_SIZE, 0, MIN_BTN_SIZE)
-	minBtn.GroupTransparency = 0
-	minBtn.Visible = true
-
+	minimizeGUI()
 	task.wait(TOGGLE_COOLDOWN)
 	UI_BUSY = false
 end)
@@ -524,13 +722,13 @@ header.Size, header.Position, header.BackgroundTransparency = UDim2.new(1, -s(8)
 local tabDiscoverBtn = createButton(header, {
 	uiSize = UDim2.new(0.48, 0, 1, 0), pos = UDim2.new(0, 0, 0, 0),
 	text = "Discover", font = Enum.Font.GothamBold, size = s(11),
-	bg = C.surfaceHi, color = C.text, radius = s(6)
+	bgKey = "surfaceHi", textKey = "text", radius = R_BUTTON
 })
 
 local tabSavedBtn = createButton(header, {
 	uiSize = UDim2.new(0.48, 0, 1, 0), pos = UDim2.new(0.52, 0, 0, 0),
 	text = "Saved", font = Enum.Font.GothamBold, size = s(11),
-	bg = C.surface, bgTransparency = 0.3, color = C.textMuted, radius = s(6)
+	bgKey = "surface", bgTransparency = 0.3, textKey = "textMuted", radius = R_BUTTON
 })
 
 local tabDiscoverUnderline = Instance.new("Frame", tabDiscoverBtn)
@@ -539,6 +737,7 @@ tabDiscoverUnderline.Position = UDim2.new(0.25, 0, 1, -s(2))
 tabDiscoverUnderline.BackgroundColor3 = C.accent
 tabDiscoverUnderline.BorderSizePixel = 0
 tabDiscoverUnderline.Visible = true
+tagTheme(tabDiscoverUnderline, "BackgroundColor3", "accent")
 createCorner(tabDiscoverUnderline, s(2))
 
 local tabSavedUnderline = Instance.new("Frame", tabSavedBtn)
@@ -547,6 +746,7 @@ tabSavedUnderline.Position = UDim2.new(0.25, 0, 1, -s(2))
 tabSavedUnderline.BackgroundColor3 = C.accent
 tabSavedUnderline.BorderSizePixel = 0
 tabSavedUnderline.Visible = false
+tagTheme(tabSavedUnderline, "BackgroundColor3", "accent")
 createCorner(tabSavedUnderline, s(2))
 
 local searchRow = Instance.new("Frame", lp_frame)
@@ -554,63 +754,112 @@ searchRow.Size, searchRow.Position, searchRow.BackgroundTransparency = UDim2.new
 
 local sb = Instance.new("TextBox", searchRow)
 sb.Size, sb.PlaceholderText, sb.Text = UDim2.new(1, -s(60), 1, 0), "Search animations...", ""
-sb.BackgroundColor3, sb.BackgroundTransparency, sb.TextColor3, sb.ClipsDescendants = C.surface, 0.15, C.text, true
-sb.PlaceholderColor3 = C.textMuted
+sb.BackgroundColor3, sb.BackgroundTransparency, sb.TextColor3, sb.ClipsDescendants = C.surface, 0.1, C.text, true
+sb.PlaceholderColor3 = C.textDim
 sb.Font, sb.TextSize = Enum.Font.Gotham, s(11)
 sb.TextXAlignment = Enum.TextXAlignment.Left
-createCorner(sb, s(7))
-local sbStroke = createStroke(sb, C.stroke, 1, 0.2)
-local sbPad = Instance.new("UIPadding", sb) sbPad.PaddingLeft = UDim.new(0, s(8))
+sb.ClearTextOnFocus = false
+createCorner(sb, R_INPUT)
+tagTheme(sb, "BackgroundColor3", "surface")
+tagTheme(sb, "TextColor3", "text")
+tagTheme(sb, "PlaceholderColor3", "textDim")
+local sbStroke = createStroke(sb, C.stroke, 1, 0.2, "stroke")
+local sbPad = Instance.new("UIPadding", sb)
+sbPad.PaddingLeft = UDim.new(0, s(8))
+sbPad.PaddingRight = UDim.new(0, s(22))
+
+local clearSearchBtn = Instance.new("TextButton", sb)
+clearSearchBtn.Size = UDim2.new(0, s(16), 0, s(16))
+clearSearchBtn.Position = UDim2.new(1, -s(20), 0.5, -s(8))
+clearSearchBtn.BackgroundColor3 = C.surfaceHi
+clearSearchBtn.BackgroundTransparency = 0.15
+clearSearchBtn.Text = "X"
+clearSearchBtn.TextColor3 = C.textDim
+clearSearchBtn.Font = Enum.Font.GothamBold
+clearSearchBtn.TextSize = s(10)
+clearSearchBtn.AutoButtonColor = false
+clearSearchBtn.Visible = false
+clearSearchBtn.ZIndex = 3
+createCorner(clearSearchBtn, R_SMALL)
+tagTheme(clearSearchBtn, "BackgroundColor3", "surfaceHi")
+tagTheme(clearSearchBtn, "TextColor3", "textDim")
+
+clearSearchBtn.MouseEnter:Connect(function()
+	local base = C.surfaceHi
+	tween(clearSearchBtn, {BackgroundColor3 = base:Lerp(Color3.new(1,1,1), 0.10)}, 0.12)
+end)
+clearSearchBtn.MouseLeave:Connect(function()
+	tween(clearSearchBtn, {BackgroundColor3 = C.surfaceHi}, 0.12)
+end)
+
+clearSearchBtn.MouseButton1Click:Connect(function()
+	sb.Text = ""
+	clearSearchBtn.Visible = false
+end)
+
+sb:GetPropertyChangedSignal("Text"):Connect(function()
+	clearSearchBtn.Visible = (#sb.Text > 0)
+end)
 
 sb.Focused:Connect(function() tween(sbStroke, {Color = C.accentDim, Transparency = 0}, 0.15) end)
 sb.FocusLost:Connect(function() tween(sbStroke, {Color = C.stroke, Transparency = 0.2}, 0.15) end)
 
 local searchBtn = createButton(searchRow, {
 	uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(1, -s(54), 0, 0),
-	text = "Search", bg = C.accent, color = Color3.fromRGB(20, 22, 26),
-	font = Enum.Font.GothamBold, size = s(11), radius = s(7),
-	hoverBg = C.accent:Lerp(Color3.new(1,1,1), 0.12)
+	text = "Search", bgKey = "surfaceHi", textKey = "text",
+	font = Enum.Font.GothamBold, size = s(11), radius = R_INPUT,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
 
 local gridScroller = Instance.new("ScrollingFrame", lp_frame)
 gridScroller.Size, gridScroller.Position = UDim2.new(1, -s(8), 1, -s(128)), UDim2.new(0, s(4), 0, s(94))
-gridScroller.BackgroundColor3, gridScroller.BackgroundTransparency, gridScroller.BorderSizePixel = C.surface, 0.55, 0
+gridScroller.BackgroundColor3, gridScroller.BackgroundTransparency, gridScroller.BorderSizePixel = C.panel, 0.35, 0
 gridScroller.ScrollBarThickness = scrollW
 gridScroller.ScrollBarImageColor3 = C.accentDim
-createCorner(gridScroller, s(8))
-createStroke(gridScroller, C.stroke, 1, 0.3)
+gridScroller.ScrollBarImageTransparency = 0.4
+tagTheme(gridScroller, "BackgroundColor3", "panel")
+tagTheme(gridScroller, "ScrollBarImageColor3", "accentDim")
+createCorner(gridScroller, R_PANEL)
+createStroke(gridScroller, C.stroke, 1, 0.35, "stroke")
 
 local loadingOverlay = Instance.new("TextLabel", lp_frame)
 loadingOverlay.Size, loadingOverlay.Position = gridScroller.Size, gridScroller.Position
 loadingOverlay.BackgroundColor3, loadingOverlay.BackgroundTransparency, loadingOverlay.ZIndex = C.bg, 0.15, 10
-loadingOverlay.Text, loadingOverlay.TextColor3, loadingOverlay.Font, loadingOverlay.ClipsDescendants = "Loading...", C.text, Enum.Font.GothamBold, true
-loadingOverlay.Visible = false; createCorner(loadingOverlay, s(8))
-applyShimmer(loadingOverlay, C.surface, C.surfaceHi)
+loadingOverlay.Text, loadingOverlay.TextColor3, loadingOverlay.Font, loadingOverlay.ClipsDescendants = "Loading...", C.textDim, Enum.Font.GothamBold, true
+loadingOverlay.TextSize = s(11)
+loadingOverlay.Visible = false
+tagTheme(loadingOverlay, "BackgroundColor3", "bg")
+tagTheme(loadingOverlay, "TextColor3", "textDim")
+createCorner(loadingOverlay, R_PANEL)
+applyShimmer(loadingOverlay, C.panel, C.surfaceHi)
 
 local footer = Instance.new("Frame", lp_frame)
 footer.Size, footer.Position, footer.BackgroundTransparency = UDim2.new(1, -s(8), 0, FOOT_H), UDim2.new(0, s(4), 1, -FOOT_H), 1
 
 local prevBtn = createButton(footer, {
 	uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(0, 0, 0, 0),
-	text = ICO_BACK .. " Back", bg = C.surfaceHi, bgTransparency = 0.4, color = C.textDim,
-	font = Enum.Font.GothamBold, size = s(10), radius = s(6)
+	text = ICO_BACK .. " Back", bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
 
 local pageLbl = createLabel(footer, {
-	text = "Page 1", font = Enum.Font.Gotham, size = s(10), color = C.textDim,
+	text = "Page 1", font = Enum.Font.Gotham, size = s(10), textKey = "textDim",
 	uiSize = UDim2.new(1, -s(118), 1, 0), pos = UDim2.new(0, s(59), 0, 0)
 })
 
 local nextBtn = createButton(footer, {
 	uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(1, -s(54), 0, 0),
-	text = "Next " .. ICO_NEXT, bg = C.surfaceHi, bgTransparency = 0.4, color = C.textDim,
-	font = Enum.Font.GothamBold, size = s(10), radius = s(6)
+	text = "Next " .. ICO_NEXT, bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
 
 local divider = Instance.new("Frame", mf)
 divider.Size, divider.Position, divider.BackgroundColor3 = UDim2.new(0, 1, 1, 0), UDim2.new(0, LEFT_W + s(6), 0, 0), C.stroke
-divider.BackgroundTransparency = 0.3
+divider.BackgroundTransparency = 0.5
 divider.BorderSizePixel = 0
+tagTheme(divider, "BackgroundColor3", "stroke")
 
 -- ---------- right panel ----------
 
@@ -618,27 +867,31 @@ local rp = Instance.new("Frame", mf)
 rp.Size, rp.Position, rp.BackgroundTransparency = UDim2.new(0, RIGHT_W - s(6), 1, 0), UDim2.new(0, LEFT_W + s(12), 0, 0), 1
 
 local previewLbl = createLabel(rp, {
-	text = "PREVIEW", font = Enum.Font.GothamBold, size = s(9), color = C.textMuted,
+	text = "PREVIEW", font = Enum.Font.GothamBold, size = s(9),
 	align = Enum.TextXAlignment.Left,
-	uiSize = UDim2.new(1, 0, 0, s(10)), pos = UDim2.new(0, s(2), 0, 0)
+	uiSize = UDim2.new(1, 0, 0, s(10)), pos = UDim2.new(0, s(2), 0, 0),
+	textKey = "textMuted"
 })
 
 local masterViewport = Instance.new("ViewportFrame", rp)
 masterViewport.Size, masterViewport.Position = UDim2.new(1, 0, 0, VP_H), UDim2.new(0, 0, 0, s(12))
-masterViewport.BackgroundColor3, masterViewport.BackgroundTransparency = C.overlay, 0.1
-createCorner(masterViewport, s(8))
-createStroke(masterViewport, C.stroke, 1, 0.15)
+masterViewport.BackgroundColor3, masterViewport.BackgroundTransparency = C.overlay, 0.05
+tagTheme(masterViewport, "BackgroundColor3", "overlay")
+createCorner(masterViewport, R_CARD)
+createStroke(masterViewport, C.stroke, 1, 0.2, "stroke")
 
 local statusFrame = Instance.new("Frame", rp)
 statusFrame.Size, statusFrame.Position = UDim2.new(1, 0, 0, s(26)), UDim2.new(0, 0, 0, VP_H + s(18))
-statusFrame.BackgroundColor3, statusFrame.BackgroundTransparency = C.surface, 0.35
-createCorner(statusFrame, s(6))
-createStroke(statusFrame, C.stroke, 1, 0.4)
+statusFrame.BackgroundColor3, statusFrame.BackgroundTransparency = C.surface, 0.3
+tagTheme(statusFrame, "BackgroundColor3", "surface")
+createCorner(statusFrame, R_BUTTON)
+createStroke(statusFrame, C.stroke, 1, 0.4, "stroke")
 
 local statusLabel = createLabel(statusFrame, {
 	text = "No bundle selected", font = Enum.Font.GothamSemibold, size = s(10),
-	color = C.textDim, align = Enum.TextXAlignment.Left,
-	uiSize = UDim2.new(1, -s(14), 1, 0), pos = UDim2.new(0, s(7), 0, 0)
+	align = Enum.TextXAlignment.Left,
+	uiSize = UDim2.new(1, -s(14), 1, 0), pos = UDim2.new(0, s(7), 0, 0),
+	textKey = "textDim"
 })
 
 local buttonContainer = Instance.new("Frame", rp)
@@ -651,27 +904,391 @@ gridBtnLayout.CellSize, gridBtnLayout.CellPadding = UDim2.new(0, btnW, 0, s(21))
 local actRow = Instance.new("Frame", rp)
 actRow.Size, actRow.Position, actRow.BackgroundTransparency = UDim2.new(1, 0, 0, s(64)), UDim2.new(0, 0, 1, -s(64)), 1
 
+-- [SAVE] [SETTINGS] row
 local bookmarkBtn = createButton(actRow, {
-	uiSize = UDim2.new(1, 0, 0, s(24)), pos = UDim2.new(0, 0, 0, 0),
-	text = "Save to Saved Tab", bg = C.panel, bgTransparency = 0.1, color = C.textMuted,
-	font = Enum.Font.GothamBold, size = s(10), radius = s(6), strokeColor = C.stroke
+	uiSize = UDim2.new(0.6, -s(2), 0, s(24)), pos = UDim2.new(0, 0, 0, 0),
+	text = "Save to Saved Tab", bgKey = "panel", bgTransparency = 0.05, textKey = "textMuted",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
 bookmarkBtn.Visible = false
 
+local settingsOpenBtn = createButton(actRow, {
+	uiSize = UDim2.new(0.4, -s(2), 0, s(24)), pos = UDim2.new(0.6, s(2), 0, 0),
+	text = "SETTINGS", bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
+	font = Enum.Font.GothamBold, size = s(9), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
+})
+
 local wearSelectedBtn = createButton(actRow, {
 	uiSize = UDim2.new(0.48, 0, 0, s(30)), pos = UDim2.new(0, 0, 1, -s(30)),
-	text = "Wear Selected", bg = C.accent, color = Color3.fromRGB(20,22,26),
-	font = Enum.Font.GothamBold, size = s(10), radius = s(6),
-	hoverBg = C.accent:Lerp(Color3.new(1,1,1), 0.12)
+	text = "Wear Selected", bgKey = "surfaceHi", textKey = "text",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
 wearSelectedBtn.Visible = false
 
 local wearAllBtn = createButton(actRow, {
 	uiSize = UDim2.new(0.48, 0, 0, s(30)), pos = UDim2.new(0.52, 0, 1, -s(30)),
-	text = "Wear All", bg = C.surfaceHi, bgTransparency = 0.15, color = C.text,
-	font = Enum.Font.GothamBold, size = s(10), radius = s(6)
+	text = "Wear All", bgKey = "surface", bgTransparency = 0.1, textKey = "text",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
 wearAllBtn.Visible = false
+
+-- ============================================================
+-- SETTINGS OVERLAY + PANEL
+-- ============================================================
+
+settingsOverlay = Instance.new("Frame", g)
+settingsOverlay.Name = "SettingsOverlay"
+settingsOverlay.Size = UDim2.new(1, 0, 1, 0)
+settingsOverlay.Position = UDim2.new(0, 0, 0, 0)
+settingsOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+settingsOverlay.BackgroundTransparency = 0.55
+settingsOverlay.Visible = false
+settingsOverlay.ZIndex = 100
+settingsOverlay.Active = true
+
+local spPanelW = math.min(s(420), vp.X - s(40))
+local spPanelH = math.min(s(360), vp.Y - s(60))
+
+local settingsPanel = Instance.new("Frame", settingsOverlay)
+settingsPanel.Name = "Panel"
+settingsPanel.Size = UDim2.new(0, spPanelW, 0, spPanelH)
+settingsPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
+settingsPanel.AnchorPoint = Vector2.new(0.5, 0.5)
+settingsPanel.BackgroundColor3 = C.bg
+settingsPanel.BackgroundTransparency = 0.02
+settingsPanel.ZIndex = 101
+settingsPanel.ClipsDescendants = true
+tagTheme(settingsPanel, "BackgroundColor3", "bg")
+createCorner(settingsPanel, R_MAIN)
+createStroke(settingsPanel, C.stroke, 1, 0.15, "stroke")
+
+local spHeader = Instance.new("Frame", settingsPanel)
+spHeader.Size = UDim2.new(1, 0, 0, s(36))
+spHeader.Position = UDim2.new(0, 0, 0, 0)
+spHeader.BackgroundTransparency = 1
+spHeader.ZIndex = 102
+
+local spTitle = createLabel(spHeader, {
+	text = "SETTINGS",
+	font = Enum.Font.GothamBold,
+	size = s(13),
+	align = Enum.TextXAlignment.Left,
+	uiSize = UDim2.new(1, -s(50), 1, 0),
+	pos = UDim2.new(0, s(14), 0, 0),
+	textKey = "text"
+})
+spTitle.ZIndex = 102
+
+local spCloseBtn = createButton(spHeader, {
+	uiSize = UDim2.new(0, s(26), 0, s(26)),
+	pos = UDim2.new(1, -s(34), 0, s(5)),
+	bgKey = "surface",
+	bgTransparency = 0.25,
+	text = "X",
+	textKey = "textDim",
+	font = Enum.Font.GothamBold,
+	size = s(11),
+	radius = R_BUTTON
+})
+spCloseBtn.ZIndex = 102
+
+local spDivider = Instance.new("Frame", settingsPanel)
+spDivider.Size = UDim2.new(1, -s(20), 0, 1)
+spDivider.Position = UDim2.new(0, s(10), 0, s(36))
+spDivider.BackgroundColor3 = C.stroke
+spDivider.BackgroundTransparency = 0.5
+spDivider.BorderSizePixel = 0
+spDivider.ZIndex = 102
+tagTheme(spDivider, "BackgroundColor3", "stroke")
+
+local spScroller = Instance.new("ScrollingFrame", settingsPanel)
+spScroller.Size = UDim2.new(1, -s(20), 1, -s(46))
+spScroller.Position = UDim2.new(0, s(10), 0, s(42))
+spScroller.BackgroundTransparency = 1
+spScroller.BorderSizePixel = 0
+spScroller.ScrollBarThickness = scrollW
+spScroller.ScrollBarImageColor3 = C.accentDim
+spScroller.CanvasSize = UDim2.new(0, 0, 0, 0)
+spScroller.ZIndex = 102
+tagTheme(spScroller, "ScrollBarImageColor3", "accentDim")
+
+local spLayout = Instance.new("UIListLayout", spScroller)
+spLayout.Padding = UDim.new(0, s(5))
+spLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local spPad = Instance.new("UIPadding", spScroller)
+spPad.PaddingTop = UDim.new(0, s(4))
+spPad.PaddingBottom = UDim.new(0, s(8))
+spPad.PaddingLeft = UDim.new(0, s(2))
+spPad.PaddingRight = UDim.new(0, s(2))
+
+spLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	spScroller.CanvasSize = UDim2.new(0, 0, 0, spLayout.AbsoluteContentSize.Y + s(12))
+end)
+
+local settingsUIUpdaters = {}
+local function registerSettingsUI(fn)
+	table.insert(settingsUIUpdaters, fn)
+	pcall(fn)
+end
+
+local function refreshAllSettingsUI()
+	for _, fn in ipairs(settingsUIUpdaters) do
+		pcall(fn)
+	end
+end
+
+-- Forward decl for update loop restart
+local restartUpdateLoop
+
+-- -- Row factories ---------------------------------------------
+
+local function makeRowBase(order)
+	local row = Instance.new("Frame", spScroller)
+	row.Size = UDim2.new(1, 0, 0, s(30))
+	row.BackgroundColor3 = C.panel
+	row.BackgroundTransparency = 0.15
+	row.BorderSizePixel = 0
+	row.LayoutOrder = order
+	row.ZIndex = 102
+	tagTheme(row, "BackgroundColor3", "panel")
+	createCorner(row, R_BUTTON)
+	createStroke(row, C.stroke, 1, 0.3, "stroke")
+	return row
+end
+
+local function makeToggleRow(order, labelText, key, onChanged)
+	local row = makeRowBase(order)
+	local lbl = createLabel(row, {
+		text = labelText,
+		font = Enum.Font.GothamSemibold,
+		size = s(10),
+		align = Enum.TextXAlignment.Left,
+		uiSize = UDim2.new(0.6, -s(14), 1, 0),
+		pos = UDim2.new(0, s(10), 0, 0),
+		textKey = "text"
+	})
+	lbl.ZIndex = 102
+
+	local btn = Instance.new("TextButton", row)
+	btn.Size = UDim2.new(0, s(52), 0, s(20))
+	btn.Position = UDim2.new(1, -s(60), 0.5, -s(10))
+	btn.BackgroundTransparency = 0
+	btn.Text = ""
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = s(9)
+	btn.AutoButtonColor = false
+	btn.ZIndex = 103
+	btn.ClipsDescendants = true
+	createCorner(btn, R_SMALL)
+
+	local function update()
+		local on = settings[key] and true or false
+		btn.Text = on and "ON" or "OFF"
+		if on then
+			btn.BackgroundColor3 = C.surfaceHi
+			btn.TextColor3 = C.text
+			btn:SetAttribute("_tk_BackgroundColor3", "surfaceHi")
+			btn:SetAttribute("_tk_TextColor3", "text")
+		else
+			btn.BackgroundColor3 = C.surface
+			btn.TextColor3 = C.textDim
+			btn:SetAttribute("_tk_BackgroundColor3", "surface")
+			btn:SetAttribute("_tk_TextColor3", "textDim")
+		end
+	end
+	registerSettingsUI(update)
+
+	btn.MouseButton1Click:Connect(function()
+		settings[key] = not settings[key]
+		saveSettings()
+		update()
+		if onChanged then pcall(onChanged, settings[key]) end
+	end)
+	return row
+end
+
+local function makeCycleRow(order, labelText, key, options, displayFn, onChanged)
+	local row = makeRowBase(order)
+	local lbl = createLabel(row, {
+		text = labelText,
+		font = Enum.Font.GothamSemibold,
+		size = s(10),
+		align = Enum.TextXAlignment.Left,
+		uiSize = UDim2.new(0.55, -s(14), 1, 0),
+		pos = UDim2.new(0, s(10), 0, 0),
+		textKey = "text"
+	})
+	lbl.ZIndex = 102
+
+	local btn = Instance.new("TextButton", row)
+	btn.Size = UDim2.new(0, s(72), 0, s(20))
+	btn.Position = UDim2.new(1, -s(80), 0.5, -s(10))
+	btn.BackgroundColor3 = C.surfaceHi
+	btn.Text = ""
+	btn.TextColor3 = C.text
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = s(9)
+	btn.AutoButtonColor = false
+	btn.ZIndex = 103
+	btn.ClipsDescendants = true
+	createCorner(btn, R_SMALL)
+	tagTheme(btn, "BackgroundColor3", "surfaceHi")
+	tagTheme(btn, "TextColor3", "text")
+
+	local function currentIndex()
+		for i, v in ipairs(options) do
+			if v == settings[key] then return i end
+		end
+		return 1
+	end
+
+	local function update()
+		local v = settings[key]
+		btn.Text = displayFn and displayFn(v) or tostring(v)
+	end
+	registerSettingsUI(update)
+
+	btn.MouseButton1Click:Connect(function()
+		local i = currentIndex()
+		i = (i % #options) + 1
+		settings[key] = options[i]
+		saveSettings()
+		update()
+		if onChanged then pcall(onChanged, settings[key]) end
+	end)
+	return row
+end
+
+local function makeActionRow(order, labelText, buttonText, onClick)
+	local row = makeRowBase(order)
+	local lbl = createLabel(row, {
+		text = labelText,
+		font = Enum.Font.GothamSemibold,
+		size = s(10),
+		align = Enum.TextXAlignment.Left,
+		uiSize = UDim2.new(0.55, -s(14), 1, 0),
+		pos = UDim2.new(0, s(10), 0, 0),
+		textKey = "text"
+	})
+	lbl.ZIndex = 102
+
+	local btn = Instance.new("TextButton", row)
+	btn.Size = UDim2.new(0, s(96), 0, s(20))
+	btn.Position = UDim2.new(1, -s(104), 0.5, -s(10))
+	btn.BackgroundColor3 = C.surfaceHi
+	btn.Text = buttonText
+	btn.TextColor3 = C.text
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = s(9)
+	btn.AutoButtonColor = false
+	btn.ZIndex = 103
+	btn.ClipsDescendants = true
+	createCorner(btn, R_SMALL)
+	tagTheme(btn, "BackgroundColor3", "surfaceHi")
+	tagTheme(btn, "TextColor3", "text")
+
+	btn.MouseButton1Click:Connect(function()
+		if onClick then pcall(onClick, btn) end
+	end)
+	return row
+end
+
+-- -- Rows ------------------------------------------------------
+
+makeToggleRow(1, "Auto Execute", "AutoExecute", function(v)
+	if v and lp.Character then
+		-- If user turns Auto Execute ON and the current character
+		-- hasn't been initialized yet, run it now.
+		if executionState.completedFor ~= lp.Character then
+			triggerAutoExecute(lp.Character)
+		end
+	end
+end)
+makeToggleRow(2, "Wait for Character", "WaitForCharacter")
+makeCycleRow(3, "Startup Delay", "StartupDelay",
+	{0, 1, 2, 3},
+	function(v) return tostring(v) .. "s" end
+)
+makeToggleRow(4, "Remember Selected Animation", "RememberSelectedAnimation")
+makeToggleRow(5, "Auto Apply Selected", "AutoApplySelected")
+makeToggleRow(6, "Auto Minimize", "AutoMinimize")
+makeToggleRow(7, "Auto Update", "AutoUpdate", function()
+	if restartUpdateLoop then restartUpdateLoop() end
+end)
+makeCycleRow(8, "Update Interval", "UpdateInterval",
+	{30, 60, 300, -1},
+	function(v)
+		if v == 30 then return "30s" end
+		if v == 60 then return "1m" end
+		if v == 300 then return "5m" end
+		return "Manual"
+	end,
+	function()
+		if restartUpdateLoop then restartUpdateLoop() end
+	end
+)
+makeCycleRow(9, "UI Scale", "UIScale",
+	{90, 100, 110},
+	function(v) return tostring(v) .. "%" end,
+	function(v)
+		uiScaleObj.Scale = math.clamp(v / 100, 0.5, 2.0)
+	end
+)
+makeToggleRow(10, "Remember Last Tab", "RememberLastTab")
+
+makeActionRow(11, "Animation Cache", "CLEAR", function(btn)
+	local original = btn.Text
+	btn.Text = "Clearing..."
+	task.spawn(function()
+		local ok, err = pcall(clearAllAnimationCache)
+		if ok then
+			btn.Text = "Cleared"
+		else
+			btn.Text = "Failed"
+		end
+		task.wait(1.2)
+		if btn and btn.Parent then
+			btn.Text = original
+		end
+	end)
+end)
+
+makeActionRow(12, "Reset All Settings", "RESET", function(btn)
+	local original = btn.Text
+	btn.Text = "Reset..."
+	settings.AutoExecute = true
+	settings.WaitForCharacter = true
+	settings.StartupDelay = 0
+	settings.RememberSelectedAnimation = true
+	settings.AutoApplySelected = true
+	settings.AutoMinimize = false
+	settings.AutoUpdate = true
+	settings.UpdateInterval = 60
+	settings.UIScale = 100
+	settings.RememberLastTab = true
+	saveSettings()
+	refreshAllSettingsUI()
+	uiScaleObj.Scale = 1.0
+	if restartUpdateLoop then restartUpdateLoop() end
+	task.wait(0.6)
+	if btn and btn.Parent then
+		btn.Text = original
+	end
+end)
+
+-- Open / close
+settingsOpenBtn.MouseButton1Click:Connect(function()
+	settingsOverlay.Visible = true
+end)
+
+spCloseBtn.MouseButton1Click:Connect(function()
+	settingsOverlay.Visible = false
+end)
 
 -- ============================================================
 -- STATE
@@ -682,11 +1299,24 @@ local targetBundleItems, activeMasterTrack, activeMasterType = nil, nil, nil
 local activeBundleName, activeBundleId = "None", nil
 local searchResults, savedTabList = {}, {}
 local catalogCursor, currentPageIndex, itemsPerPage = nil, 1, 5
-local currentTab = "Discover"
-local userSelectedAnimSlot = "idleanimation"
+local currentTab = settings.RememberLastTab and settings.LastTab or "Discover"
+if currentTab ~= "Saved" then currentTab = "Discover" end
+local userSelectedAnimSlot = settings.LastSelectedSlot or "idleanimation"
+
+-- forward declarations
+local executeSearch
+local refreshTabVisuals
+local refreshAnimButtonVisuals
+local triggerAutoExecute
+
+-- Auto Execute state
+local executionState = {
+	inProgress = false,
+	completedFor = nil,
+}
 
 -- ============================================================
--- LOGIC (unchanged behaviour, re-wired to new UI objects)
+-- LOGIC
 -- ============================================================
 
 local function preloadAnimations(tracks)
@@ -697,28 +1327,51 @@ end
 
 local function buildViewportSkeleton(vpFrame)
 	local wm = vpFrame:FindFirstChildOfClass("WorldModel")
-	if not wm then wm = Instance.new("WorldModel", vpFrame) else for _,c in ipairs(wm:GetChildren()) do c:Destroy() end end
+	if not wm then wm = Instance.new("WorldModel", vpFrame)
+	else for _,c in ipairs(wm:GetChildren()) do c:Destroy() end end
+
 	local char = lp.Character or lp.CharacterAdded:Wait()
+	if not char then
+		return nil, nil, nil
+	end
 	char.Archivable = true
-	local clone = char:Clone(); clone.Parent = wm
-	local root, human = clone:WaitForChild("HumanoidRootPart"), clone:FindFirstChildOfClass("Humanoid")
-	local anim = human:FindFirstChildOfClass("Animator") or Instance.new("Animator", human)
-	if clone:FindFirstChild("Animate") then clone.Animate.Disabled = true end
+	local clone = char:Clone()
+	if not clone then return nil, nil, nil end
+	clone.Parent = wm
+
+	local root = clone:WaitForChild("HumanoidRootPart", 5)
+	local human = clone:FindFirstChildOfClass("Humanoid")
+
+	local anim
+	if human then
+		anim = human:FindFirstChildOfClass("Animator") or Instance.new("Animator", human)
+	end
+
+	local animateFolder = clone:FindFirstChild("Animate")
+	if animateFolder then animateFolder.Disabled = true end
+
 	local cam = vpFrame:FindFirstChildOfClass("Camera") or Instance.new("Camera", vpFrame)
 	vpFrame.CurrentCamera = cam
 	cam.CFrame = CFrame.new(Vector3.new(0, 1.5, 6), Vector3.new(0, 0, 0))
+
 	local angle = 0
 	local conn = rs.RenderStepped:Connect(function(dt)
-		if clone and root then angle = angle + math.rad(25*dt); clone:PivotTo(CFrame.new(0,0,0) * CFrame.Angles(0, angle, 0)) end
+		if clone and clone.Parent and root and root.Parent then
+			angle = angle + math.rad(25*dt)
+			clone:PivotTo(CFrame.new(0,0,0) * CFrame.Angles(0, angle, 0))
+		end
 	end)
 	return clone, anim, conn
 end
 
 local function applyAnimationToCharacter(character, targetAnimations, slotType)
+	if not character then return end
 	local animate = character:WaitForChild("Animate", 5)
 	local human = character:FindFirstChildOfClass("Humanoid")
 	if not animate or not human then return end
-	for _, tr in ipairs(human:GetPlayingAnimationTracks()) do pcall(function() tr:AdjustWeight(0,0); tr:Stop(0) end) end
+	for _, tr in ipairs(human:GetPlayingAnimationTracks()) do
+		pcall(function() tr:AdjustWeight(0,0); tr:Stop(0) end)
+	end
 	animate.Disabled = true
 	local cleanSlot = string.lower(slotType or "")
 	local fId = m[cleanSlot]
@@ -739,7 +1392,7 @@ local function applyAnimationToCharacter(character, targetAnimations, slotType)
 end
 
 local function getSpecificTrack(fetchedTracks, targetType)
-	if #fetchedTracks == 0 then return nil end
+	if not fetchedTracks or #fetchedTracks == 0 then return nil end
 	if targetType == "swimidleanimation" then
 		for _, tr in ipairs(fetchedTracks) do if string.lower(tr.Name):find("idle") then return tr end end
 		return fetchedTracks[2] or fetchedTracks[1]
@@ -749,9 +1402,13 @@ local function getSpecificTrack(fetchedTracks, targetType)
 	return fetchedTracks[1]
 end
 
-local function truncate(str, maxLen) return #str > maxLen and str:sub(1, maxLen-1)..ICO_DOTS or str end
+local function truncate(str, maxLen)
+	if not str then return "" end
+	return #str > maxLen and str:sub(1, maxLen-1)..ICO_DOTS or str
+end
 
 local function tryPlayTrack(animator, track, looped)
+	if not animator or not track then return false, nil end
 	local ok, pt = pcall(function() local tr = animator:LoadAnimation(track); tr.Looped=looped; tr:Play(); return tr end)
 	if not ok or not pt then return false, nil end
 	task.wait(0.15)
@@ -821,25 +1478,25 @@ local function renderMasterTrack(itemPayload, assetTypeName)
 	local displayType = shortNames[lowerType] or "Track"
 
 	statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " " .. displayType .. " (loading...)"
-	applyShimmer(statusLabel, C.textDim, Color3.new(1,1,1))
+	applyShimmer(statusLabel, C.textDim, C.text)
 
 	local vpShimmer = masterViewport:FindFirstChild("LoadingShimmer")
 	if not vpShimmer then
 		vpShimmer = Instance.new("Frame", masterViewport)
 		vpShimmer.Name = "LoadingShimmer"
 		vpShimmer.Size, vpShimmer.BackgroundColor3, vpShimmer.BorderSizePixel = UDim2.new(1,0,1,0), C.overlay, 0
-		createCorner(vpShimmer, s(8))
-		applyShimmer(vpShimmer, C.overlay, C.surfaceHi)
+		createCorner(vpShimmer, R_CARD)
+		applyShimmer(vpShimmer, C.overlay, C.surface)
 	end
 
 	task.spawn(function()
 		local attempt, fetchedTracks, trackToPlay = 0, nil, nil
 		while myGen == masterRenderGen do
 			fetchedTracks = get(itemPayload.Id, nil, itemPayload.AssetType)
-			trackToPlay = (#fetchedTracks>0) and getSpecificTrack(fetchedTracks, lowerType) or nil
+			trackToPlay = (fetchedTracks and #fetchedTracks>0) and getSpecificTrack(fetchedTracks, lowerType) or nil
 			if trackToPlay then break end
 			attempt = attempt + 1
-			statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " " .. displayType .. " (reloading..." .. attempt .. ")"
+			statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " " .. displayType .. " (reloading " .. attempt .. ")"
 			clearAssetCache(itemPayload.Id)
 			task.wait(math.min(0.5 + attempt * 0.3, 3))
 		end
@@ -854,7 +1511,7 @@ local function renderMasterTrack(itemPayload, assetTypeName)
 		activeMasterType = assetTypeName
 		statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " " .. displayType
 		local isIdle = (lowerType == "idleanimation")
-		if isIdle and fetchedTracks and #fetchedTracks > 1 then
+		if isIdle and fetchedTracks and #fetchedTracks > 1 and animator then
 			local pointer = 1
 			while myGen == masterRenderGen and dummy and dummy.Parent do
 				if activeMasterTrack then activeMasterTrack:Stop() end
@@ -862,20 +1519,23 @@ local function renderMasterTrack(itemPayload, assetTypeName)
 				while not ok and myGen == masterRenderGen do
 					clearAssetCache(itemPayload.Id)
 					fetchedTracks = get(itemPayload.Id, nil, itemPayload.AssetType)
+					if not fetchedTracks or #fetchedTracks == 0 then task.wait(0.4); continue end
 					pointer = pointer > #fetchedTracks and 1 or pointer
 					task.wait(0.4); ok, playedTrack = tryPlayTrack(animator, fetchedTracks[pointer], false)
 				end
 				if myGen ~= masterRenderGen then return end
-				activeMasterTrack = playedTrack; activeMasterTrack.Stopped:Wait()
+				activeMasterTrack = playedTrack
+				if activeMasterTrack then activeMasterTrack.Stopped:Wait() end
+				if not fetchedTracks or #fetchedTracks == 0 then return end
 				pointer = (pointer % #fetchedTracks) + 1
 			end
-		elseif trackToPlay then
+		elseif trackToPlay and animator then
 			local ok, playedTrack = tryPlayTrack(animator, trackToPlay, true)
 			while not ok and myGen == masterRenderGen do
 				clearAssetCache(itemPayload.Id)
 				task.wait(0.4)
 				local reloaded = get(itemPayload.Id, nil, itemPayload.AssetType)
-				trackToPlay = (#reloaded>0) and getSpecificTrack(reloaded, lowerType) or nil
+				trackToPlay = (reloaded and #reloaded>0) and getSpecificTrack(reloaded, lowerType) or nil
 				if trackToPlay then ok, playedTrack = tryPlayTrack(animator, trackToPlay, true) end
 			end
 			if myGen ~= masterRenderGen then return end
@@ -887,21 +1547,20 @@ end
 for _, lowerType in ipairs(buttonOrder) do
 	local btn = createButton(buttonContainer, {
 		uiSize = UDim2.new(0, btnW, 0, s(21)),
-		bg = C.surfaceHi, bgTransparency = 0.35, color = C.textMuted,
-		text = shortNames[lowerType], font = Enum.Font.GothamBold, size = s(9.5), radius = s(5)
+		bgKey = "surface", bgTransparency = 0.25, textKey = "textMuted",
+		text = shortNames[lowerType], font = Enum.Font.GothamBold, size = s(9.5), radius = R_SMALL,
+		strokeColor = C.stroke, strokeKey = "stroke"
 	})
 
 	btn.MouseButton1Click:Connect(function()
 		userSelectedAnimSlot = lowerType
+		settings.LastSelectedSlot = lowerType
+		saveSettings()
 		local payload = currentBundleItems[lowerType]
 		if payload then
 			wearSelectedBtn.Visible = true
 			renderMasterTrack(payload, lowerType)
-			for slot, b in pairs(animationButtons) do
-				local activeColor = (slot == lowerType) and C.accent or (currentBundleItems[slot] and C.green or C.surfaceHi)
-				tween(b, {BackgroundColor3 = activeColor}, 0.15)
-				b.TextColor3 = (slot == lowerType) and Color3.fromRGB(20,22,26) or ((currentBundleItems[slot]) and C.text or C.textMuted)
-			end
+			if refreshAnimButtonVisuals then refreshAnimButtonVisuals() end
 		end
 	end)
 	animationButtons[lowerType] = btn
@@ -911,31 +1570,56 @@ local function refreshBookmarkBtn()
 	if not activeBundleId then bookmarkBtn.Visible = false return end
 	bookmarkBtn.Visible = true
 	if savedBookmarks[tostring(activeBundleId)] then
-		bookmarkBtn.Text, bookmarkBtn.TextColor3 = "Saved to Saved Tab", C.fav
+		bookmarkBtn.Text = "Saved to Saved Tab"
+		bookmarkBtn.TextColor3 = C.fav
 	else
-		bookmarkBtn.Text, bookmarkBtn.TextColor3 = "Save to Saved Tab", C.textMuted
+		bookmarkBtn.Text = "Save to Saved Tab"
+		bookmarkBtn.TextColor3 = C.textMuted
+	end
+end
+
+refreshAnimButtonVisuals = function()
+	for slot, b in pairs(animationButtons) do
+		local isSel = (slot == userSelectedAnimSlot) and currentBundleItems[slot]
+		local hasData = currentBundleItems[slot] ~= nil
+		if isSel then
+			b.BackgroundColor3 = C.surfaceHi
+			b.TextColor3 = C.text
+		elseif hasData then
+			b.BackgroundColor3 = C.surface
+			b.TextColor3 = C.text
+		else
+			b.BackgroundColor3 = C.surface
+			b.TextColor3 = C.textMuted
+		end
 	end
 end
 
 bookmarkBtn.MouseButton1Click:Connect(function()
 	toggleBookmark(activeBundleId, activeBundleName)
 	refreshBookmarkBtn()
-	if currentTab == "Saved" then searchBtn.MouseButton1Click:Fire() end
+	if currentTab == "Saved" then executeSearch(sb.Text) end
 end)
 
 local function inspectBundleDetails(bundleId, bundleName)
 	table.clear(currentBundleItems)
 	wearSelectedBtn.Visible, wearAllBtn.Visible = false, false
 	activeBundleName, activeBundleId = bundleName or "Unknown", bundleId
+
+	-- Remember selected bundle (used by Auto Apply Selected)
+	settings.LastSelectedBundleId = bundleId
+	settings.LastSelectedBundleName = bundleName
+	saveSettings()
+
 	statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " Loading..."
-	applyShimmer(statusLabel, C.textDim, Color3.new(1,1,1))
+	applyShimmer(statusLabel, C.textDim, C.text)
 	refreshBookmarkBtn()
-	for _, btn in pairs(animationButtons) do btn.BackgroundColor3, btn.TextColor3 = C.surfaceHi, C.textMuted end
+	refreshAnimButtonVisuals()
 
 	task.spawn(function()
 		local ok, res = pcall(function() return as:GetBundleDetailsAsync(bundleId) end)
 		if not ok or not res or not res.Items then
-			statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " Error"
+			statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " Couldn't load"
 			removeShimmer(statusLabel)
 			return
 		end
@@ -952,31 +1636,76 @@ local function inspectBundleDetails(bundleId, bundleName)
 		end
 
 		local slotToPlay = currentBundleItems[userSelectedAnimSlot] and userSelectedAnimSlot or "idleanimation"
-
-		for slot, b in pairs(animationButtons) do
-			if currentBundleItems[slot] then b.BackgroundColor3, b.TextColor3 = C.green, C.text end
-		end
+		refreshAnimButtonVisuals()
 
 		if currentBundleItems[slotToPlay] then
-			animationButtons[slotToPlay].BackgroundColor3 = C.accent
 			wearSelectedBtn.Visible = true
 			renderMasterTrack(currentBundleItems[slotToPlay], slotToPlay)
 		else
-			statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " Missing Anim"
+			statusLabel.Text = truncate(activeBundleName, 24) .. " " .. ICO_DOT .. " No preview"
 			removeShimmer(statusLabel)
 		end
 	end)
 end
 
 local function clearActiveGridContext()
-	for _, t in ipairs(activeGridThreads) do task.cancel(t) end
+	for _, t in ipairs(activeGridThreads) do pcall(task.cancel, t) end
 	activeGridThreads = {}
-	for _, c in ipairs(gridScroller:GetChildren()) do if c:IsA("ViewportFrame") then c:Destroy() end end
+	for _, c in ipairs(gridScroller:GetChildren()) do
+		if c:IsA("ViewportFrame") or c:IsA("Frame") or c:IsA("TextLabel") or c:IsA("TextButton") then
+			c:Destroy()
+		end
+	end
+end
+
+local function drawEmptyState(title, subtitle)
+	clearActiveGridContext()
+	loadingOverlay.Visible = false
+
+	local wrap = Instance.new("Frame", gridScroller)
+	wrap.Size = UDim2.new(1, 0, 1, 0)
+	wrap.Position = UDim2.new(0, 0, 0, 0)
+	wrap.BackgroundTransparency = 1
+
+	local t = Instance.new("TextLabel", wrap)
+	t.Size = UDim2.new(1, 0, 0, s(20))
+	t.Position = UDim2.new(0, 0, 0.5, -s(16))
+	t.BackgroundTransparency = 1
+	t.Text = title
+	t.Font = Enum.Font.GothamBold
+	t.TextSize = s(11)
+	t.TextColor3 = C.text
+	tagTheme(t, "TextColor3", "text")
+
+	local sub = Instance.new("TextLabel", wrap)
+	sub.Size = UDim2.new(1, 0, 0, s(14))
+	sub.Position = UDim2.new(0, 0, 0.5, s(4))
+	sub.BackgroundTransparency = 1
+	sub.Text = subtitle
+	sub.Font = Enum.Font.Gotham
+	sub.TextSize = s(9)
+	sub.TextColor3 = C.textMuted
+	tagTheme(sub, "TextColor3", "textMuted")
+
+	gridScroller.CanvasSize = UDim2.new(0, 0, 0, s(220))
+	pageLbl.Text = "Page 1"
+	prevBtn.BackgroundTransparency, prevBtn.TextColor3 = 0.5, C.textMuted
+	nextBtn.BackgroundTransparency, nextBtn.TextColor3 = 0.5, C.textMuted
 end
 
 local function drawGridPage(dataList)
 	clearActiveGridContext()
 	loadingOverlay.Visible = false
+
+	if not dataList or #dataList == 0 then
+		if currentTab == "Saved" then
+			drawEmptyState("No Saved Animations", "Save animations to find them here.")
+		else
+			drawEmptyState("No results found", "Try searching again.")
+		end
+		return
+	end
+
 	local start = (currentPageIndex - 1) * itemsPerPage + 1
 	local ending = math.min(currentPageIndex * itemsPerPage, #dataList)
 
@@ -990,13 +1719,12 @@ local function drawGridPage(dataList)
 		local bundle = dataList[i]
 		if not bundle then break end
 
-		-- IMPORTANT: this must stay a ViewportFrame (not a plain Frame/createCard),
-		-- because buildViewportSkeleton() below requires a ViewportFrame
-		-- (it sets vpFrame.CurrentCamera, which only exists on ViewportFrame).
+		-- Must stay ViewportFrame for buildViewportSkeleton
 		local box = Instance.new("ViewportFrame", gridScroller)
-		box.BackgroundColor3, box.BackgroundTransparency, box.BorderSizePixel = C.panel, 0.1, 0
-		createCorner(box, s(8))
-		createStroke(box, C.stroke, 1)
+		box.BackgroundColor3, box.BackgroundTransparency, box.BorderSizePixel = C.panel, 0.05, 0
+		tagTheme(box, "BackgroundColor3", "panel")
+		createCorner(box, R_CARD)
+		createStroke(box, C.stroke, 1, 0.2, "stroke")
 
 		local boxWidth, posX, posY = 0, 0, 0
 
@@ -1019,24 +1747,28 @@ local function drawGridPage(dataList)
 
 		local skeleton = Instance.new("Frame", box)
 		skeleton.Size, skeleton.BackgroundColor3, skeleton.BorderSizePixel, skeleton.ZIndex = UDim2.new(1,0,1,0), C.panel, 0, 2
-		createCorner(skeleton, s(8))
+		tagTheme(skeleton, "BackgroundColor3", "panel")
+		createCorner(skeleton, R_CARD)
 		applyShimmer(skeleton, C.panel, C.surfaceHi)
 
 		local label = Instance.new("TextLabel", box)
-		label.Size, label.Position, label.BackgroundColor3, label.BackgroundTransparency = UDim2.new(1, 0, 0, nameRowH), UDim2.new(0, 0, 1, -(nameRowH + actionRowH)), C.overlay, 0.25
+		label.Size, label.Position, label.BackgroundColor3, label.BackgroundTransparency = UDim2.new(1, 0, 0, nameRowH), UDim2.new(0, 0, 1, -(nameRowH + actionRowH)), C.overlay, 0.3
 		label.Text, label.TextColor3, label.Font, label.TextSize, label.ZIndex, label.ClipsDescendants = truncate(bundle.Name, 9), C.text, Enum.Font.GothamBold, s(8), 3, true
+		tagTheme(label, "BackgroundColor3", "overlay")
+		tagTheme(label, "TextColor3", "text")
 
 		local hitBtn = Instance.new("TextButton", box)
 		hitBtn.Size, hitBtn.Position, hitBtn.BackgroundTransparency, hitBtn.Text, hitBtn.ZIndex, hitBtn.ClipsDescendants = UDim2.new(1, 0, 1, -actionRowH), UDim2.new(0,0,0,0), 1, "", 4, true
-		hitBtn.MouseEnter:Connect(function() tween(box, {BackgroundColor3 = C.surfaceHi}, 0.12) end)
+		hitBtn.MouseEnter:Connect(function() tween(box, {BackgroundColor3 = C.surface}, 0.12) end)
 		hitBtn.MouseLeave:Connect(function() tween(box, {BackgroundColor3 = C.panel}, 0.12) end)
 		hitBtn.MouseButton1Click:Connect(function() inspectBundleDetails(bundle.Id, bundle.Name) end)
 
 		if currentTab == "Saved" then
 			local favBtn = Instance.new("TextButton", box)
 			favBtn.Size, favBtn.Position, favBtn.BackgroundTransparency = UDim2.new(0, s(20), 0, s(20)), UDim2.new(1, -s(22), 0, s(2)), 1
-			favBtn.Text, favBtn.Font, favBtn.TextSize, favBtn.ZIndex, favBtn.ClipsDescendants = (bundle.Fav and ICO_STAR_ON or ICO_STAR_OFF), Enum.Font.GothamBold, s(14), 5, true
+			favBtn.Text, favBtn.Font, favBtn.TextSize, favBtn.ZIndex, favBtn.ClipsDescendants = (bundle.Fav and ICO_STAR_ON or ICO_STAR_OFF), Enum.Font.GothamBold, s(13), 5, true
 			favBtn.TextColor3 = bundle.Fav and C.fav or C.textMuted
+			favBtn:SetAttribute("_fav", bundle.Fav and true or false)
 
 			favBtn.MouseButton1Click:Connect(function()
 				local sId = tostring(bundle.Id)
@@ -1047,6 +1779,7 @@ local function drawGridPage(dataList)
 					bundle.Fav = savedBookmarks[sId].Fav
 					favBtn.Text = bundle.Fav and ICO_STAR_ON or ICO_STAR_OFF
 					favBtn.TextColor3 = bundle.Fav and C.fav or C.textMuted
+					favBtn:SetAttribute("_fav", bundle.Fav and true or false)
 				end
 			end)
 		end
@@ -1059,26 +1792,31 @@ local function drawGridPage(dataList)
 
 		local saveCardBtn = Instance.new("TextButton", cardActions)
 		saveCardBtn.Size, saveCardBtn.Position = UDim2.new(0.5, -s(1), 1, 0), UDim2.new(0, 0, 0, 0)
-		saveCardBtn.BackgroundColor3, saveCardBtn.BackgroundTransparency = C.surface, 0.1
+		saveCardBtn.BackgroundColor3, saveCardBtn.BackgroundTransparency = C.surface, 0.05
+		tagTheme(saveCardBtn, "BackgroundColor3", "surface")
 		saveCardBtn.Text = alreadySaved and (ICO_CHECK .. " Saved") or "+ Save"
 		saveCardBtn.TextColor3 = alreadySaved and C.fav or C.textDim
 		saveCardBtn.Font, saveCardBtn.TextSize, saveCardBtn.ZIndex, saveCardBtn.ClipsDescendants = Enum.Font.GothamBold, s(7), 6, true
-		createCorner(saveCardBtn, s(3))
+		saveCardBtn:SetAttribute("_savedState", alreadySaved and true or false)
+		createCorner(saveCardBtn, R_SMALL)
 
 		local wearCardBtn = Instance.new("TextButton", cardActions)
 		wearCardBtn.Size, wearCardBtn.Position = UDim2.new(0.5, -s(1), 1, 0), UDim2.new(0.5, s(2), 0, 0)
-		wearCardBtn.BackgroundColor3, wearCardBtn.BackgroundTransparency = C.surface, 0.1
-		wearCardBtn.Text, wearCardBtn.TextColor3 = ICO_PLAY .. " Wear", C.green
+		wearCardBtn.BackgroundColor3, wearCardBtn.BackgroundTransparency = C.surface, 0.05
+		tagTheme(wearCardBtn, "BackgroundColor3", "surface")
+		wearCardBtn.Text, wearCardBtn.TextColor3 = ICO_PLAY .. " Wear", C.textDim
+		tagTheme(wearCardBtn, "TextColor3", "textDim")
 		wearCardBtn.Font, wearCardBtn.TextSize, wearCardBtn.ZIndex, wearCardBtn.ClipsDescendants = Enum.Font.GothamBold, s(7), 6, true
-		createCorner(wearCardBtn, s(3))
+		createCorner(wearCardBtn, R_SMALL)
 
 		saveCardBtn.MouseButton1Click:Connect(function()
 			local nowSaved = toggleBookmark(bundle.Id, bundle.Name)
 			saveCardBtn.Text = nowSaved and (ICO_CHECK .. " Saved") or "+ Save"
 			saveCardBtn.TextColor3 = nowSaved and C.fav or C.textDim
+			saveCardBtn:SetAttribute("_savedState", nowSaved and true or false)
 			if activeBundleId == bundle.Id then refreshBookmarkBtn() end
 			if currentTab == "Saved" and not nowSaved then
-				searchBtn.MouseButton1Click:Fire()
+				executeSearch(sb.Text)
 			end
 		end)
 
@@ -1091,6 +1829,7 @@ local function drawGridPage(dataList)
 
 		local dummy, animator, conn = buildViewportSkeleton(box)
 		local loopThread = task.spawn(function()
+			if not animator then return end
 			local ok, details = pcall(function() return as:GetBundleDetailsAsync(bundle.Id) end)
 			if not ok or not details or not details.Items then return end
 			local usableTracks = {}
@@ -1099,8 +1838,9 @@ local function drawGridPage(dataList)
 			local tIdx, cellTrack = 1, nil
 			while box and box.Parent do
 				local subItem = usableTracks[tIdx]
+				if not subItem then break end
 				local assets = get(subItem.Id, bundle.Id, subItem.AssetType)
-				if #assets > 0 then
+				if assets and #assets > 0 then
 					if cellTrack then cellTrack:Stop() end
 					cellTrack = animator:LoadAnimation(assets[1]); cellTrack.Looped = true
 					if skeleton.Parent then skeleton:Destroy() end
@@ -1110,7 +1850,10 @@ local function drawGridPage(dataList)
 			end
 		end)
 		table.insert(activeGridThreads, loopThread)
-		box.Destroying:Connect(function() task.cancel(loopThread); conn:Disconnect() end)
+		box.Destroying:Connect(function()
+			pcall(task.cancel, loopThread)
+			if conn then conn:Disconnect() end
+		end)
 
 		idx = idx + 1
 	end
@@ -1120,7 +1863,7 @@ local function drawGridPage(dataList)
 	prevBtn.BackgroundTransparency, prevBtn.TextColor3 = (currentPageIndex > 1) and 0.15 or 0.5, (currentPageIndex > 1) and C.text or C.textMuted
 end
 
-local function executeSearch(query)
+executeSearch = function(query)
 	currentPageIndex = 1
 	loadingOverlay.Visible, pageLbl.Text = true, "Loading..."
 
@@ -1155,23 +1898,27 @@ local function executeSearch(query)
 	end
 end
 
--- ---------- tab switching ----------
-
-local function setTab(tabName)
-	if currentTab == tabName then return end
-	currentTab = tabName
-	local discoverActive = (tabName == "Discover")
-
-	tween(tabDiscoverBtn, {BackgroundColor3 = discoverActive and C.surfaceHi or C.surface}, 0.15)
+refreshTabVisuals = function()
+	local discoverActive = (currentTab == "Discover")
+	tabDiscoverBtn.BackgroundColor3 = discoverActive and C.surfaceHi or C.surface
 	tabDiscoverBtn.TextColor3 = discoverActive and C.text or C.textMuted
 	tabDiscoverBtn.BackgroundTransparency = discoverActive and 0 or 0.3
 	tabDiscoverUnderline.Visible = discoverActive
 
-	tween(tabSavedBtn, {BackgroundColor3 = (not discoverActive) and C.surfaceHi or C.surface}, 0.15)
+	tabSavedBtn.BackgroundColor3 = (not discoverActive) and C.surfaceHi or C.surface
 	tabSavedBtn.TextColor3 = (not discoverActive) and C.text or C.textMuted
 	tabSavedBtn.BackgroundTransparency = (not discoverActive) and 0 or 0.3
 	tabSavedUnderline.Visible = not discoverActive
+end
 
+local function setTab(tabName)
+	if currentTab == tabName then return end
+	currentTab = tabName
+	if settings.RememberLastTab then
+		settings.LastTab = tabName
+		saveSettings()
+	end
+	refreshTabVisuals()
 	executeSearch(sb.Text)
 end
 
@@ -1206,7 +1953,7 @@ end)
 wearSelectedBtn.MouseButton1Click:Connect(function()
 	if not activeMasterType or not lp.Character then return end
 	wearSelectedBtn.Text = "Loading..."
-	applyShimmer(wearSelectedBtn, C.accent, Color3.new(1,1,1))
+	applyShimmer(wearSelectedBtn, C.surface, C.surfaceHi)
 	local payload = currentBundleItems[string.lower(activeMasterType)]
 	if payload then
 		local tracks = get(payload.Id, nil, payload.AssetType)
@@ -1220,7 +1967,7 @@ end)
 wearAllBtn.MouseButton1Click:Connect(function()
 	if not lp.Character then return end
 	wearAllBtn.Text = "Loading..."
-	applyShimmer(wearAllBtn, C.surfaceHi, Color3.new(1,1,1))
+	applyShimmer(wearAllBtn, C.surfaceHi, C.text)
 	applyBundleItemsToCharacter(currentBundleItems)
 	wearAllBtn.Text = "Wear All"
 	removeShimmer(wearAllBtn)
@@ -1228,5 +1975,283 @@ end)
 
 searchBtn.MouseButton1Click:Connect(function() executeSearch(sb.Text) end)
 sb.FocusLost:Connect(function(enterPressed) if enterPressed then executeSearch(sb.Text) end end)
+
+-- ============================================================
+-- AUTO EXECUTE SYSTEM
+-- ============================================================
+
+triggerAutoExecute = function(char)
+	if not char then return end
+	if not settings.AutoExecute then return end
+	if executionState.inProgress then return end
+	if executionState.completedFor == char then return end
+
+	executionState.inProgress = true
+
+	task.spawn(function()
+		local ok, err = pcall(function()
+			-- 1) Wait for dependencies
+			if settings.WaitForCharacter then
+				local human = char:WaitForChild("Humanoid", 10)
+				if not human then return end
+				-- Animator is optional but wait up to 3s
+				local animator = human:FindFirstChildOfClass("Animator")
+				if not animator then
+					local deadline = tick() + 3
+					while not animator and tick() < deadline and char.Parent do
+						task.wait(0.1)
+						animator = human:FindFirstChildOfClass("Animator")
+					end
+				end
+			end
+
+			-- 2) Startup delay
+			local delay = tonumber(settings.StartupDelay) or 0
+			if delay > 0 then
+				task.wait(delay)
+			end
+
+			-- 3) Run existing auto-equip path
+			initAutoEquip(char)
+
+			-- 4) Auto apply last selected bundle
+			if settings.RememberSelectedAnimation and settings.AutoApplySelected
+				and settings.LastSelectedBundleId then
+				local applyOk, res = pcall(function()
+					return as:GetBundleDetailsAsync(settings.LastSelectedBundleId)
+				end)
+				if applyOk and res and res.Items then
+					local items = {}
+					for _, item in ipairs(res.Items) do
+						local lt = string.lower(item.AssetType or "")
+						if lt == "swimanimation" then
+							items["swimanimation"] = item
+							items["swimidleanimation"] = item
+						elseif shortNames[lt] then
+							items[lt] = item
+						end
+					end
+					if next(items) and lp.Character then
+						applyBundleItemsToCharacter(items)
+					end
+				end
+			end
+		end)
+
+		executionState.completedFor = char
+		executionState.inProgress = false
+
+		-- 5) Auto minimize (only on successful init)
+		if ok and settings.AutoMinimize then
+			task.wait(0.2)
+			minimizeGUI()
+		end
+	end)
+end
+
+-- Character respawn handling
+local function onCharacterAdded(char)
+	-- Reset per-character state for the new character
+	executionState.completedFor = nil
+	executionState.inProgress = false
+	if settings.AutoExecute then
+		triggerAutoExecute(char)
+	end
+end
+
+-- Initial execution
+if lp.Character then
+	if settings.AutoExecute then
+		task.spawn(function() triggerAutoExecute(lp.Character) end)
+	end
+else
+	lp.CharacterAdded:Wait()
+	if settings.AutoExecute then
+		task.spawn(function() triggerAutoExecute(lp.Character) end)
+	end
+end
+
+lp.CharacterAdded:Connect(onCharacterAdded)
+
+-- ============================================================
+-- AUTO UPDATE LOOP
+-- ============================================================
+
+local updateThread = nil
+
+restartUpdateLoop = function()
+	if updateThread then
+		pcall(task.cancel, updateThread)
+		updateThread = nil
+	end
+	local interval = tonumber(settings.UpdateInterval) or 60
+	if settings.AutoUpdate and interval and interval > 0 then
+		updateThread = task.spawn(function()
+			while settings.AutoUpdate and (tonumber(settings.UpdateInterval) or 0) > 0 do
+				local ok, onlineContent = pcall(function() return game:HttpGet(ANIM_CACHE_URL) end)
+				if ok and onlineContent then
+					pcall(function()
+						local onlineData = hs:JSONDecode(onlineContent)
+						for k, v in pairs(onlineData) do
+							if not fileCache[k] then fileCache[k] = v end
+						end
+						saveJSON(CACHE_FILE_NAME, fileCache)
+					end)
+				end
+				local waitTime = tonumber(settings.UpdateInterval) or 60
+				if waitTime <= 0 then break end
+				task.wait(waitTime)
+			end
+			updateThread = nil
+		end)
+	end
+end
+
+restartUpdateLoop()
+
+-- ============================================================
+-- THEME APPLICATION
+-- ============================================================
+
+local applyTheme
+applyTheme = function(newTheme, skipSave)
+	if newTheme ~= "Dark" and newTheme ~= "Light" then newTheme = "Dark" end
+	Theme = newTheme
+	syncC()
+
+	-- 1) Update all tagged properties
+	for _, d in ipairs(g:GetDescendants()) do
+		local okAttrs, attrs = pcall(function() return d:GetAttributes() end)
+		if okAttrs and attrs then
+			for attrName, key in pairs(attrs) do
+				if type(attrName) == "string" and attrName:sub(1, 4) == "_tk_" and type(key) == "string" and C[key] then
+					local propName = attrName:sub(5)
+					pcall(function() d[propName] = C[key] end)
+				end
+			end
+		end
+
+		local favAttr = d:GetAttribute("_fav")
+		if favAttr ~= nil then
+			d.TextColor3 = favAttr and C.fav or C.textMuted
+		end
+
+		local savedAttr = d:GetAttribute("_savedState")
+		if savedAttr ~= nil then
+			d.TextColor3 = savedAttr and C.fav or C.textDim
+		end
+	end
+
+	-- 2) Cool gradients
+	for _, d in ipairs(g:GetDescendants()) do
+		if d:IsA("UIGradient") and d.Name == "CoolGrad" then
+			d.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, C.surface),
+				ColorSequenceKeypoint.new(0.5, C.panel),
+				ColorSequenceKeypoint.new(1, C.bg)
+			})
+		end
+	end
+
+	-- 3) State-dependent visuals
+	if refreshTabVisuals then refreshTabVisuals() end
+	if refreshAnimButtonVisuals then refreshAnimButtonVisuals() end
+	refreshBookmarkBtn()
+
+	-- 4) Theme button
+	themeBtn.Text = (Theme == "Dark") and "LIGHT" or "DARK"
+
+	-- 5) Shimmer gradients
+	for _, d in ipairs(g:GetDescendants()) do
+		if d:IsA("UIGradient") and d.Name == "ShimmerGrad" then
+			d.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, C.panel),
+				ColorSequenceKeypoint.new(0.5, C.surfaceHi),
+				ColorSequenceKeypoint.new(1, C.panel)
+			})
+		end
+	end
+
+	-- 6) Persist
+	if not skipSave then
+		writeThemeToFiles(Theme)
+	end
+end
+
+themeBtn.MouseButton1Click:Connect(function()
+	local nextTheme = (Theme == "Dark") and "Light" or "Dark"
+	applyTheme(nextTheme)
+end)
+
+-- ============================================================
+-- DRAG HELPERS (main window header + minimized pill)
+-- ============================================================
+
+local DRAG_THRESHOLD = s(6)
+
+local function attachDrag(dragTarget, moveTarget, isMinimized)
+	local active = false
+	local moved = false
+	local startInput, startPos
+
+	dragTarget.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			active = true
+			moved = false
+			startInput = input.Position
+			startPos = moveTarget.Position
+		end
+	end)
+
+	dragTarget.InputChanged:Connect(function(input)
+		if not active then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = input.Position - startInput
+			if math.abs(delta.X) > DRAG_THRESHOLD or math.abs(delta.Y) > DRAG_THRESHOLD then
+				moved = true
+			end
+			if moved then
+				local newX = startPos.X.Offset + delta.X
+				local newY = startPos.Y.Offset + delta.Y
+				moveTarget.Position = UDim2.new(startPos.X.Scale, newX, startPos.Y.Scale, newY)
+			end
+		end
+	end)
+
+	dragTarget.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			if active and not moved and isMinimized then
+				-- treat as click
+				if not UI_BUSY then
+					UI_BUSY = true
+					restoreGUI()
+					task.wait(TOGGLE_COOLDOWN)
+					UI_BUSY = false
+				end
+			end
+			active = false
+			moved = false
+		end
+	end)
+end
+
+attachDrag(minBtnHit, minBtn, true)
+attachDrag(headerBar, mf, false)
+
+-- ============================================================
+-- INIT
+-- ============================================================
+
+themeBtn.Text = (Theme == "Dark") and "LIGHT" or "DARK"
+refreshTabVisuals()
+refreshBookmarkBtn()
+
+-- Restore last selected slot into UI selection state
+if settings.RememberSelectedAnimation and settings.LastSelectedSlot then
+	userSelectedAnimSlot = settings.LastSelectedSlot
+end
 
 executeSearch("")
