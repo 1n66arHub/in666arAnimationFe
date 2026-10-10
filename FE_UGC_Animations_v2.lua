@@ -1,23 +1,120 @@
 --[[
-FE UGC ANIMATIONS v2.2.0
+FE UGC ANIMATIONS V2.5.0
 Universal Animation Manager
 Made By @in66ar
 
-v2.2.0 CHANGES (audit + fix):  
-  - Clear button uses ASCII "X" (no Unicode glyph)  
-  - Search placeholder uses textDim for readable Light mode  
-  - Clear button gets subtle background + hover (theme aware)  
-  - Stroke theme binding on buttons (strokeKey)  
-  - Version bumped to v2.2.0
-  - Floating/minimize toggle drag fix (touch + mouse, custom UIS-based)
-
-v2.1.0:  
-  - Dark Mode (default, graphite)  
-  - Light Mode (off-white / charcoal)  
-  - Theme switching (real-time)  
-  - Theme persistence (FE_UGC_Animations_Theme.json)
-
+V2.5.0 CHANGES:
+  - Icon fallback PAKAI GLYPH AMAN (bukan huruf random) — anti mojibake
+  - Card action buttons (SAVE/PLAY) pakai TEXT LABEL — jelas & kebaca
+  - Toast diganti Right-Side Notif elegan (slide-in, color-coded)
+  - Header buttons 24px -> 28px (mobile friendly)
+  - Shimmer restart on theme change (fix stuck shimmer)
+  - Icon fallback font size lebih besar biar kebaca
+  - Minor: card row height 16 -> 22 biar tombol ga sesak
 ]]
+
+-- ============================================================
+-- SHIME MODULE (Shimmer Effect) - by @RyanLua
+-- ============================================================
+local Shime = (function()
+	local Shime = {}
+	Shime.__index = Shime
+	local TweenService = game:GetService("TweenService")
+
+	local function createShimmer(parent)
+		local frame = Instance.new("Frame")
+		frame.Name = "UIShimmer"
+		frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		frame.BackgroundTransparency = 0
+		frame.ClipsDescendants = true
+		frame.Size = UDim2.new(1, 0, 1, 0)
+		frame.AnchorPoint = Vector2.new(0.5, 0.5)
+		frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+		frame.BorderSizePixel = 0
+		frame.Visible = false
+		frame.Parent = parent
+
+		local function updateCornerRadius()
+			if frame.Parent:FindFirstChildOfClass("UICorner") then
+				local parentCorner = frame.Parent:FindFirstChildOfClass("UICorner")
+				local corner = frame:FindFirstChildOfClass("UICorner") or Instance.new("UICorner")
+				corner.CornerRadius = parentCorner.CornerRadius
+				corner.Parent = frame
+			end
+		end
+		frame:GetPropertyChangedSignal("Parent"):Connect(updateCornerRadius)
+		updateCornerRadius()
+
+		local gradient = Instance.new("UIGradient")
+		gradient.Rotation = 15
+		gradient.Color = ColorSequence.new(Color3.new(1, 1, 1))
+		gradient.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.15, 1),
+			NumberSequenceKeypoint.new(0.5, 0.55),
+			NumberSequenceKeypoint.new(0.85, 1),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		gradient.Offset = Vector2.new(-1, 0)
+		gradient.Parent = frame
+		return frame
+	end
+
+	Shime.PlaybackState = nil
+
+	function Shime.new(parent, time, style, direction, repeatCount, reverses, delayTime)
+		assert(typeof(parent) == "Instance" and parent:IsA("GuiObject"), "Invalid parent")
+		time = time or 1
+		style = style or Enum.EasingStyle.Linear
+		direction = direction or Enum.EasingDirection.InOut
+		repeatCount = repeatCount or -1
+		reverses = reverses or false
+		delayTime = delayTime or 0
+
+		local self = setmetatable({}, Shime)
+		local shimmer = createShimmer(parent)
+		self._frame = shimmer
+		self._gradient = shimmer:FindFirstChildOfClass("UIGradient")
+		self._tween = TweenService:Create(
+			self._gradient,
+			TweenInfo.new(time, style, direction, repeatCount, reverses, delayTime),
+			{ Offset = Vector2.new(1, 0) }
+		)
+		self._tween.Completed:Connect(function()
+			shimmer.Visible = false
+			self.PlaybackState = Enum.PlaybackState.Completed
+		end)
+		return self
+	end
+
+	function Shime:GetFrame() return self._frame end
+	function Shime:GetGradient() return self._gradient end
+
+	function Shime:Play()
+		self.PlaybackState = Enum.PlaybackState.Begin
+		self._frame.Visible = true
+		self._tween:Play()
+		self.PlaybackState = Enum.PlaybackState.Playing
+	end
+
+	function Shime:Pause()
+		if self.PlaybackState == Enum.PlaybackState.Playing then
+			self._tween:Pause()
+			self.PlaybackState = Enum.PlaybackState.Paused
+		end
+	end
+
+	function Shime:Cancel()
+		self._tween:Cancel()
+		self._frame.Visible = false
+		self.PlaybackState = Enum.PlaybackState.Cancelled
+	end
+
+	return Shime
+end)()
+-- ============================================================
+-- END SHIME MODULE
+-- ============================================================
 
 local plrs = game:GetService("Players")
 local as = game:GetService("AssetService")
@@ -73,7 +170,6 @@ local ICO_CHECK     = uchr(226,156,147) -- ✓
 local ICO_PLAY      = uchr(226,150,182) -- ▶
 local ICO_DOTS      = uchr(226,128,166) -- …
 local ICO_DOT       = uchr(226,128,162) -- •
--- NOTE: Clear button deliberately uses ASCII "X" instead of a Unicode glyph.
 
 local CACHE_FILE_NAME = "animation_bundle_data_cache.json"
 local ANIM_CACHE_URL = "https://raw.githubusercontent.com/TribalFootball/TuffTeto/main/animation_bundle_data_cache.json"
@@ -417,6 +513,138 @@ end
 return inst
 end
 
+-- ============================================================
+-- ICON SYSTEM (Phosphor Bold spritesheet, auto fallback to text)
+-- ============================================================
+local ICON_SHEET_URL  = "https://raw.githubusercontent.com/1n66arHub/in666arAnimationFe/main/icons.png"
+local ICON_SHEET_FILE = "FeUgcAnim_icons_v1.png"
+local ICON_CELL = 64
+
+-- {column, row} inside the 4-column spritesheet, starting at 0
+local ICON_MAP = {
+	close         = {0, 0}, minimize      = {1, 0}, sun       = {2, 0}, moon    = {3, 0},
+	search        = {0, 1}, bookmark      = {1, 1}, star      = {2, 1}, play    = {3, 1},
+	back          = {0, 2}, next          = {1, 2}, reset     = {2, 2}, shuffle = {3, 2},
+	copy          = {0, 3}, gear          = {1, 3}, check     = {2, 3}, filter  = {3, 3},
+	star_fill     = {0, 4}, bookmark_fill = {1, 4},
+}
+
+-- ============================================================
+-- ICON FALLBACK — pakai glyph unicode yang PASTI render di Roblox
+-- (built via string.char biar anti-mojibake)
+-- ============================================================
+local function g(...) return string.char(...) end
+local ICON_TEXT = {
+	close         = g(226,156,149), -- ✕
+	minimize      = g(226,148,128), -- ─
+	sun           = g(226,152,128), -- ☀ (fallback ringan)
+	moon          = g(226,152,190), -- ☾
+	search        = g(226,140,149), -- ⌕ (fallback: pakai "Q" kalau ga render)
+	bookmark      = g(226,157,146), -- ❒ outline
+	star          = g(226,152,134), -- ☆
+	play          = g(226,150,182), -- ▶
+	back          = g(226,151,128), -- ◀
+	next          = g(226,150,182), -- ▶
+	reset         = g(226,134,187), -- ↻
+	shuffle       = g(226,135,132), -- ⇄
+	copy          = g(226,140,152), -- ⎘
+	gear          = g(226,154,153), -- ⚙
+	check         = g(226,156,147), -- ✓
+	filter        = g(226,137,161), -- ≡
+	star_fill     = g(226,152,133), -- ★
+	bookmark_fill = g(226,157,147), -- ❒ filled-ish
+}
+-- Kalau glyph spesifik di atas ga render di device tertentu,
+-- sistem tetap punya fallback terakhir berupa text singkat:
+local ICON_TEXT_FALLBACK = {
+	close = "X", minimize = "-", sun = "L", moon = "D",
+	search = "GO", bookmark = "SAVE", star = "*", play = "PLAY",
+	back = "<", next = ">", reset = "RST", shuffle = "SHF",
+	copy = "CPY", gear = "CFG", check = "OK", filter = "FLT",
+	star_fill = "*", bookmark_fill = "SAVE",
+}
+
+local iconSheet = nil
+do
+	local getAsset = getcustomasset or getsynasset
+	if getAsset and writefile and isfile then
+		pcall(function()
+			if not isfile(ICON_SHEET_FILE) then
+				local data = game:HttpGet(ICON_SHEET_URL)
+				-- only cache real PNG data (avoid caching an error page)
+				if type(data) == "string" and data:sub(2, 4) == "PNG" then
+					writefile(ICON_SHEET_FILE, data)
+				end
+			end
+			if isfile(ICON_SHEET_FILE) then
+				iconSheet = getAsset(ICON_SHEET_FILE)
+			end
+		end)
+	end
+end
+
+local function getIco(btn)
+	return btn and btn:FindFirstChild("Ico", true)
+end
+
+local function setIconColor(btn, color)
+	local ic = getIco(btn)
+	if not ic then return end
+	if ic:IsA("ImageLabel") then ic.ImageColor3 = color else ic.TextColor3 = color end
+end
+
+local function setIconTransparency(btn, a)
+	local ic = getIco(btn)
+	if not ic then return end
+	if ic:IsA("ImageLabel") then ic.ImageTransparency = a else ic.TextTransparency = a end
+end
+
+local function setIconName(btn, name)
+	local ic = getIco(btn)
+	if not ic then return end
+	if ic:IsA("ImageLabel") then
+		local pos = ICON_MAP[name]
+		if pos then ic.ImageRectOffset = Vector2.new(pos[1] * ICON_CELL, pos[2] * ICON_CELL) end
+	else
+		-- Pakai glyph aman; kalau gagal, ada fallback text singkat.
+		ic.Text = ICON_TEXT[name] or ICON_TEXT_FALLBACK[name] or "?"
+	end
+end
+
+-- creates a centered icon inside `parent` (usually a button).
+-- colorKey: theme key for the icon color (default "textDim"); pass false to skip theme tagging
+-- (use that for icons whose color is state-driven, like favorite / saved).
+local function makeIcon(parent, name, size, colorKey)
+	if colorKey == nil then colorKey = "textDim" end
+	local holder = Instance.new("Frame", parent)
+	holder.Name = "IcoHolder"
+	holder.BackgroundTransparency = 1
+	holder.Size = UDim2.new(0, size, 0, size)
+	holder.AnchorPoint = Vector2.new(0.5, 0.5)
+	holder.Position = UDim2.new(0.5, 0, 0.5, 0)
+
+	local ico
+	if iconSheet then
+		ico = Instance.new("ImageLabel", holder)
+		ico.Image = iconSheet
+		ico.ImageRectSize = Vector2.new(ICON_CELL, ICON_CELL)
+		ico.ImageColor3 = C[colorKey or "textDim"] or C.textDim
+	else
+		ico = Instance.new("TextLabel", holder)
+		ico.Font = Enum.Font.GothamBold
+		ico.TextSize = math.max(size, 12) -- biar glyph kebaca
+		ico.TextColor3 = C[colorKey or "textDim"] or C.textDim
+	end
+	ico.Name = "Ico"
+	ico.BackgroundTransparency = 1
+	ico.Size = UDim2.new(1, 0, 1, 0)
+	if colorKey then
+		tagTheme(ico, iconSheet and "ImageColor3" or "TextColor3", colorKey)
+	end
+	setIconName(parent, name)
+	return holder
+end
+
 local function applyCoolGradient(parent)
 local existing = parent:FindFirstChild("CoolGrad")
 if existing then existing:Destroy() end
@@ -542,6 +770,140 @@ task.delay(0.1, function()
 tween(mf, {Size = UDim2.new(0, W, 0, H), GroupTransparency = 0}, 0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 end)
 
+-- ============================================================
+-- ✨ RIGHT-SIDE ELEGANT NOTIF (menggantikan toast bawah)
+-- ============================================================
+local notifHolder = Instance.new("Frame", g)
+notifHolder.Name = "NotifHolder"
+notifHolder.BackgroundTransparency = 1
+notifHolder.AnchorPoint = Vector2.new(1, 0)
+notifHolder.Position = UDim2.new(1, -s(14), 0, s(20))
+notifHolder.Size = UDim2.new(0, s(230), 1, -s(40))
+notifHolder.ZIndex = 60
+
+local notifLayout = Instance.new("UIListLayout", notifHolder)
+notifLayout.Padding = UDim.new(0, s(6))
+notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
+notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+
+local NOTIF_MAX = 3
+local notifCount = 0
+
+local function pushNotif(msg, kind)
+	kind = kind or "info"
+	notifCount = notifCount + 1
+	local order = notifCount
+
+	-- trim kalau lebih dari max
+	local kids = {}
+	for _, c in ipairs(notifHolder:GetChildren()) do
+		if c:IsA("Frame") then table.insert(kids, c) end
+	end
+	if #kids >= NOTIF_MAX then
+		table.sort(kids, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+		local oldest = kids[1]
+		if oldest then
+			local tw = ts:Create(oldest, TweenInfo.new(0.2), {BackgroundTransparency = 1})
+			tw:Play()
+			task.delay(0.2, function() if oldest and oldest.Parent then oldest:Destroy() end end)
+		end
+	end
+
+	local accent = C.accent
+	if kind == "success" then accent = C.green
+	elseif kind == "warn" then accent = C.fav
+	elseif kind == "error" then accent = Color3.fromRGB(210, 90, 90)
+	end
+
+	local card = Instance.new("Frame", notifHolder)
+	card.Name = "Notif_" .. tostring(order)
+	card.LayoutOrder = order
+	card.Size = UDim2.new(1, 0, 0, s(38))
+	card.BackgroundColor3 = C.surface
+	card.BackgroundTransparency = 0.05
+	card.BorderSizePixel = 0
+	card.AnchorPoint = Vector2.new(1, 0)
+	card.Position = UDim2.new(1, s(240), 0, 0)
+	card.ClipsDescendants = true
+	tagTheme(card, "BackgroundColor3", "surface")
+	createCorner(card, R_BUTTON)
+	local stroke = createStroke(card, C.stroke, 1, 0.3, "stroke")
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+	-- accent bar kiri
+	local bar = Instance.new("Frame", card)
+	bar.Size = UDim2.new(0, s(3), 0.65, 0)
+	bar.Position = UDim2.new(0, 0, 0.175, 0)
+	bar.BackgroundColor3 = accent
+	bar.BorderSizePixel = 0
+	createCorner(bar, s(2))
+
+	-- dot
+	local dot = Instance.new("Frame", card)
+	dot.Size = UDim2.new(0, s(6), 0, s(6))
+	dot.Position = UDim2.new(0, s(10), 0.5, -s(3))
+	dot.BackgroundColor3 = accent
+	dot.BorderSizePixel = 0
+	createCorner(dot, s(3))
+
+	-- text
+	local lbl = Instance.new("TextLabel", card)
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.new(1, -s(26), 1, 0)
+	lbl.Position = UDim2.new(0, s(22), 0, 0)
+	lbl.Font = Enum.Font.GothamMedium
+	lbl.TextSize = s(10)
+	lbl.Text = tostring(msg)
+	lbl.TextColor3 = C.text
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.TextTruncate = Enum.TextTruncate.AtEnd
+	tagTheme(lbl, "TextColor3", "text")
+
+	-- progress bar
+	local progBg = Instance.new("Frame", card)
+	progBg.Size = UDim2.new(1, -s(16), 0, s(2))
+	progBg.Position = UDim2.new(0, s(8), 1, -s(4))
+	progBg.BackgroundColor3 = C.surfaceHi
+	progBg.BorderSizePixel = 0
+	progBg.BackgroundTransparency = 0.3
+	tagTheme(progBg, "BackgroundColor3", "surfaceHi")
+	createCorner(progBg, s(1))
+	local progFill = Instance.new("Frame", progBg)
+	progFill.Size = UDim2.new(1, 0, 1, 0)
+	progFill.BackgroundColor3 = accent
+	progFill.BorderSizePixel = 0
+	createCorner(progFill, s(1))
+
+	-- slide-in
+	tween(card, {Position = UDim2.new(1, 0, 0, 0)}, 0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	tween(progFill, {Size = UDim2.new(0, 0, 1, 0)}, 1.9, Enum.EasingStyle.Linear)
+
+	-- auto-dismiss
+	task.delay(2, function()
+		if card and card.Parent then
+			local out = ts:Create(card, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Position = UDim2.new(1, s(240), 0, 0),
+				BackgroundTransparency = 1
+			})
+			out:Play()
+			out.Completed:Connect(function()
+				if card then card:Destroy() end
+			end)
+		end
+	end)
+end
+
+-- Backward-compat: showToast dipanggil banyak tempat, kita alias ke pushNotif
+local function showToast(msg)
+	local l = string.lower(tostring(msg))
+	local kind = "info"
+	if l:find("equip") or l:find("reset") or l:find("saved") then kind = "success"
+	elseif l:find("fail") or l:find("error") then kind = "error"
+	elseif l:find("theme") then kind = "info"
+	end
+	pushNotif(msg, kind)
+end
+
 -- ---------- minimized pill ----------
 
 local minBtn = Instance.new("CanvasGroup", g)
@@ -571,9 +933,6 @@ minBtnHit.Size, minBtnHit.BackgroundTransparency, minBtnHit.Text, minBtnHit.Clip
 -- ============================================================
 -- FLOATING / MINIMIZE TOGGLE — CUSTOM DRAG (touch + mouse)
 -- ============================================================
--- Uses UserInputService global InputChanged/InputEnded so the drag
--- keeps tracking even when the pointer leaves the button (fast swipes).
--- Tap (no movement past threshold) still restores the UI.
 do
 	local drag = {
 		active = false,
@@ -672,58 +1031,53 @@ text = "FE UGC ANIMATIONS",
 font = Enum.Font.GothamBlack,
 size = s(16),
 align = Enum.TextXAlignment.Left,
-uiSize = UDim2.new(1, -s(170), 0, s(17)),
+uiSize = UDim2.new(1, -s(200), 0, s(17)),
 pos = UDim2.new(0, s(2), 0, s(2)),
 textKey = "text"
 })
 
 local subtitleLbl = createLabel(headerBar, {
-text = "by @in66ar v2.2.0",
+text = "by @in66ar V2.5.0",
 font = Enum.Font.GothamMedium,
 size = s(11),
 align = Enum.TextXAlignment.Left,
-uiSize = UDim2.new(1, -s(170), 0, s(15)),
+uiSize = UDim2.new(1, -s(200), 0, s(15)),
 pos = UDim2.new(0, s(2), 0, s(20)),
 textKey = "subtitle"
 })
 
--- Theme toggle button (text-only: LIGHT / DARK)
-local themeBtn = createButton(headerBar, {
-uiSize = UDim2.new(0, s(50), 0, s(24)),
-pos = UDim2.new(1, -s(106), 0, s(2)),
-bgKey = "surface",
-bgTransparency = 0.25,
-text = (Theme == "Dark") and "LIGHT" or "DARK",
-textKey = "textDim",
-font = Enum.Font.GothamBold,
-size = s(9),
-radius = R_BUTTON
+-- Header buttons: 24 -> 28 biar gampang di-tap
+local HDR_BTN = s(28)
+local HDR_GAP = s(4)
+
+local resetBtn = createButton(headerBar, {
+	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
+	pos = UDim2.new(1, -(HDR_BTN*4 + HDR_GAP*3), 0, 0),
+	bgKey = "surface", bgTransparency = 0.25, text = "", radius = R_BUTTON
 })
+makeIcon(resetBtn, "reset", s(14))
+
+local themeBtn = createButton(headerBar, {
+	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
+	pos = UDim2.new(1, -(HDR_BTN*3 + HDR_GAP*2), 0, 0),
+	bgKey = "surface", bgTransparency = 0.25, text = "", radius = R_BUTTON
+})
+makeIcon(themeBtn, (Theme == "Dark") and "sun" or "moon", s(14))
 
 local minWindowBtn = createButton(headerBar, {
-uiSize = UDim2.new(0, s(24), 0, s(24)),
-pos = UDim2.new(1, -s(52), 0, s(2)),
-bgKey = "surface",
-bgTransparency = 0.25,
-text = "-",
-textKey = "textDim",
-font = Enum.Font.GothamBold,
-size = s(16),
-radius = R_BUTTON
+	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
+	pos = UDim2.new(1, -(HDR_BTN*2 + HDR_GAP*1), 0, 0),
+	bgKey = "surface", bgTransparency = 0.25, text = "", radius = R_BUTTON
 })
+makeIcon(minWindowBtn, "minimize", s(14))
 
 local closeWindowBtn = createButton(headerBar, {
-uiSize = UDim2.new(0, s(24), 0, s(24)),
-pos = UDim2.new(1, -s(24), 0, s(2)),
-bgKey = "surface",
-bgTransparency = 0.25,
-text = "X",
-textKey = "textDim",
-font = Enum.Font.GothamBold,
-size = s(12),
-radius = R_BUTTON,
-hoverBg = Color3.fromRGB(70, 45, 45)
+	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
+	pos = UDim2.new(1, -HDR_BTN, 0, 0),
+	bgKey = "surface", bgTransparency = 0.25, text = "", radius = R_BUTTON,
+	hoverBg = Color3.fromRGB(70, 45, 45)
 })
+makeIcon(closeWindowBtn, "close", s(14))
 
 closeWindowBtn.MouseButton1Click:Connect(function()
 tween(mf, {GroupTransparency = 1, Size = UDim2.new(0,0,0,0)}, 0.2)
@@ -805,13 +1159,12 @@ local sbPad = Instance.new("UIPadding", sb)
 sbPad.PaddingLeft = UDim.new(0, s(8))
 sbPad.PaddingRight = UDim.new(0, s(22))
 
--- clear button (subtle, only visible when search has text)
 local clearSearchBtn = Instance.new("TextButton", sb)
 clearSearchBtn.Size = UDim2.new(0, s(16), 0, s(16))
 clearSearchBtn.Position = UDim2.new(1, -s(20), 0.5, -s(8))
 clearSearchBtn.BackgroundColor3 = C.surfaceHi
 clearSearchBtn.BackgroundTransparency = 0.15
-clearSearchBtn.Text = "X"
+clearSearchBtn.Text = ""
 clearSearchBtn.TextColor3 = C.textDim
 clearSearchBtn.Font = Enum.Font.GothamBold
 clearSearchBtn.TextSize = s(10)
@@ -821,6 +1174,7 @@ clearSearchBtn.ZIndex = 3
 createCorner(clearSearchBtn, R_SMALL)
 tagTheme(clearSearchBtn, "BackgroundColor3", "surfaceHi")
 tagTheme(clearSearchBtn, "TextColor3", "textDim")
+makeIcon(clearSearchBtn, "close", s(11))
 
 clearSearchBtn.MouseEnter:Connect(function()
 local base = C.surfaceHi
@@ -843,11 +1197,12 @@ sb.Focused:Connect(function() tween(sbStroke, {Color = C.accentDim, Transparency
 sb.FocusLost:Connect(function() tween(sbStroke, {Color = C.stroke, Transparency = 0.2}, 0.15) end)
 
 local searchBtn = createButton(searchRow, {
-uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(1, -s(54), 0, 0),
-text = "Search", bgKey = "surfaceHi", textKey = "text",
-font = Enum.Font.GothamBold, size = s(11), radius = R_INPUT,
-strokeColor = C.stroke, strokeKey = "stroke"
+	uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(1, -s(54), 0, 0),
+	text = "", bgKey = "surfaceHi", textKey = "text",
+	font = Enum.Font.GothamBold, size = s(11), radius = R_INPUT,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
+makeIcon(searchBtn, "search", s(14), "text")
 
 local gridScroller = Instance.new("ScrollingFrame", lp_frame)
 gridScroller.Size, gridScroller.Position = UDim2.new(1, -s(8), 1, -s(128)), UDim2.new(0, s(4), 0, s(94))
@@ -875,11 +1230,12 @@ local footer = Instance.new("Frame", lp_frame)
 footer.Size, footer.Position, footer.BackgroundTransparency = UDim2.new(1, -s(8), 0, FOOT_H), UDim2.new(0, s(4), 1, -FOOT_H), 1
 
 local prevBtn = createButton(footer, {
-uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(0, 0, 0, 0),
-text = ICO_BACK .. " Back", bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
-font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
-strokeColor = C.stroke, strokeKey = "stroke"
+	uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(0, 0, 0, 0),
+	text = "", bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
+makeIcon(prevBtn, "back", s(13))
 
 local pageLbl = createLabel(footer, {
 text = "Page 1", font = Enum.Font.Gotham, size = s(10), textKey = "textDim",
@@ -887,11 +1243,12 @@ uiSize = UDim2.new(1, -s(118), 1, 0), pos = UDim2.new(0, s(59), 0, 0)
 })
 
 local nextBtn = createButton(footer, {
-uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(1, -s(54), 0, 0),
-text = "Next " .. ICO_NEXT, bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
-font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
-strokeColor = C.stroke, strokeKey = "stroke"
+	uiSize = UDim2.new(0, s(54), 1, 0), pos = UDim2.new(1, -s(54), 0, 0),
+	text = "", bgKey = "surface", bgTransparency = 0.15, textKey = "textDim",
+	font = Enum.Font.GothamBold, size = s(10), radius = R_BUTTON,
+	strokeColor = C.stroke, strokeKey = "stroke"
 })
+makeIcon(nextBtn, "next", s(13))
 
 local divider = Instance.new("Frame", mf)
 divider.Size, divider.Position, divider.BackgroundColor3 = UDim2.new(0, 1, 1, 0), UDim2.new(0, LEFT_W + s(6), 0, 0), C.stroke
@@ -1060,6 +1417,58 @@ end
 task.wait(0.05); animate.Disabled = false
 end
 
+local function resetToDefaultAnimations()
+	local char = lp.Character
+	if not char then return false end
+	local animate = char:FindFirstChild("Animate")
+	local human = char:FindFirstChildOfClass("Humanoid")
+	if not animate or not human then return false end
+
+	local ok = pcall(function()
+		local desc = plrs:GetHumanoidDescriptionFromUserId(lp.UserId)
+		local dummy = plrs:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+		local srcAnimate = dummy:FindFirstChild("Animate")
+		assert(srcAnimate, "default Animate not found")
+
+		for _, tr in ipairs(human:GetPlayingAnimationTracks()) do
+			pcall(function() tr:AdjustWeight(0, 0); tr:Stop(0) end)
+		end
+		animate.Disabled = true
+		for _, folderName in pairs(m) do
+			local dst = animate:FindFirstChild(folderName)
+			local src = srcAnimate:FindFirstChild(folderName)
+			if dst and src then
+				for _, o in ipairs(dst:GetChildren()) do
+					if o:IsA("Animation") then o:Destroy() end
+				end
+				for _, o in ipairs(src:GetChildren()) do
+					if o:IsA("Animation") then o:Clone().Parent = dst end
+				end
+			end
+		end
+		dummy:Destroy()
+		task.wait(0.05)
+		animate.Disabled = false
+	end)
+
+	if not ok then
+		pcall(function() animate.Disabled = false end)
+		return false
+	end
+
+	for k in pairs(equippedAnims) do equippedAnims[k] = nil end
+	saveJSON(EQUIPPED_FILE, equippedAnims)
+	return true
+end
+
+resetBtn.MouseButton1Click:Connect(function()
+	task.spawn(function()
+		showToast("Resetting...")
+		local done = resetToDefaultAnimations()
+		showToast(done and "Reset to default" or "Reset failed")
+	end)
+end)
+
 local function getSpecificTrack(fetchedTracks, targetType)
 if not fetchedTracks or #fetchedTracks == 0 then return nil end
 if targetType == "swimidleanimation" then
@@ -1106,6 +1515,7 @@ end
 
 local function wearBundleQuickly(bundleId, onDone)
 task.spawn(function()
+local success = false
 local ok, res = pcall(function() return as:GetBundleDetailsAsync(bundleId) end)
 if ok and res and res.Items and lp.Character then
 local items = {}
@@ -1118,8 +1528,9 @@ items[lt] = item
 end
 end
 applyBundleItemsToCharacter(items)
+success = true
 end
-if onDone then onDone() end
+if onDone then onDone(success) end
 end)
 end
 
@@ -1239,7 +1650,7 @@ local function refreshBookmarkBtn()
 if not activeBundleId then bookmarkBtn.Visible = false return end
 bookmarkBtn.Visible = true
 if savedBookmarks[tostring(activeBundleId)] then
-bookmarkBtn.Text = "Saved to Saved Tab"
+bookmarkBtn.Text = "✓ Saved to Saved Tab"
 bookmarkBtn.TextColor3 = C.fav
 else
 bookmarkBtn.Text = "Save to Saved Tab"
@@ -1265,7 +1676,8 @@ end
 end
 
 bookmarkBtn.MouseButton1Click:Connect(function()
-toggleBookmark(activeBundleId, activeBundleName)
+local nowSavedMain = toggleBookmark(activeBundleId, activeBundleName)
+showToast(nowSavedMain and "Saved to bookmarks" or "Removed from saved")
 refreshBookmarkBtn()
 if currentTab == "Saved" then executeSearch(sb.Text) end
 end)
@@ -1353,8 +1765,10 @@ tagTheme(sub, "TextColor3", "textMuted")
 
 gridScroller.CanvasSize = UDim2.new(0, 0, 0, s(220))  
 pageLbl.Text = "Page 1"  
-prevBtn.BackgroundTransparency, prevBtn.TextColor3 = 0.5, C.textMuted  
-nextBtn.BackgroundTransparency, nextBtn.TextColor3 = 0.5, C.textMuted
+prevBtn.BackgroundTransparency = 0.5
+setIconColor(prevBtn, C.textMuted)
+nextBtn.BackgroundTransparency = 0.5
+setIconColor(nextBtn, C.textMuted)
 
 end
 
@@ -1376,7 +1790,7 @@ local ending = math.min(currentPageIndex * itemsPerPage, #dataList)
 
 local usableWidth = LEFT_W - s(8) - scrollW  
 local boxHeight = s(94)  
-local actionRowH = s(16)  
+local actionRowH = s(22) -- dinaikin dari s(16) biar tombol ga sesak
 local nameRowH = s(14)  
 
 local idx = 1  
@@ -1384,8 +1798,6 @@ for i = start, ending do
 	local bundle = dataList[i]  
 	if not bundle then break end  
 
-	-- IMPORTANT: this must stay a ViewportFrame (not a plain Frame),  
-	-- because buildViewportSkeleton() below requires a ViewportFrame.  
 	local box = Instance.new("ViewportFrame", gridScroller)  
 	box.BackgroundColor3, box.BackgroundTransparency, box.BorderSizePixel = C.panel, 0.05, 0  
 	tagTheme(box, "BackgroundColor3", "panel")  
@@ -1431,9 +1843,10 @@ for i = start, ending do
 
 	if currentTab == "Saved" then  
 		local favBtn = Instance.new("TextButton", box)  
-		favBtn.Size, favBtn.Position, favBtn.BackgroundTransparency = UDim2.new(0, s(20), 0, s(20)), UDim2.new(1, -s(22), 0, s(2)), 1  
-		favBtn.Text, favBtn.Font, favBtn.TextSize, favBtn.ZIndex, favBtn.ClipsDescendants = (bundle.Fav and ICO_STAR_ON or ICO_STAR_OFF), Enum.Font.GothamBold, s(13), 5, true  
-		favBtn.TextColor3 = bundle.Fav and C.fav or C.textMuted  
+		favBtn.Size, favBtn.Position, favBtn.BackgroundTransparency = UDim2.new(0, s(22), 0, s(22)), UDim2.new(1, -s(24), 0, s(2)), 1  
+		favBtn.Text, favBtn.ZIndex, favBtn.ClipsDescendants = "", 5, true
+		makeIcon(favBtn, bundle.Fav and "star_fill" or "star", s(14), false)
+		setIconColor(favBtn, bundle.Fav and C.fav or C.textMuted)
 		favBtn:SetAttribute("_fav", bundle.Fav and true or false)  
 
 		favBtn.MouseButton1Click:Connect(function()  
@@ -1443,8 +1856,8 @@ for i = start, ending do
 				saveJSON(SAVED_BUNDLES_FILE, savedBookmarks)  
 
 				bundle.Fav = savedBookmarks[sId].Fav  
-				favBtn.Text = bundle.Fav and ICO_STAR_ON or ICO_STAR_OFF  
-				favBtn.TextColor3 = bundle.Fav and C.fav or C.textMuted  
+				setIconName(favBtn, bundle.Fav and "star_fill" or "star")
+				setIconColor(favBtn, bundle.Fav and C.fav or C.textMuted)
 				favBtn:SetAttribute("_fav", bundle.Fav and true or false)  
 			end  
 		end)  
@@ -1456,29 +1869,42 @@ for i = start, ending do
 
 	local alreadySaved = savedBookmarks[tostring(bundle.Id)] ~= nil  
 
+	-- ============================================================
+	-- SAVE BUTTON — pakai TEXT LABEL biar jelas (bukan cuma icon)
+	-- ============================================================
 	local saveCardBtn = Instance.new("TextButton", cardActions)  
 	saveCardBtn.Size, saveCardBtn.Position = UDim2.new(0.5, -s(1), 1, 0), UDim2.new(0, 0, 0, 0)  
-	saveCardBtn.BackgroundColor3, saveCardBtn.BackgroundTransparency = C.surface, 0.05  
+	saveCardBtn.BackgroundColor3 = alreadySaved and C.surfaceHi or C.surface
+	saveCardBtn.BackgroundTransparency = 0.05  
 	tagTheme(saveCardBtn, "BackgroundColor3", "surface")  
-	saveCardBtn.Text = alreadySaved and (ICO_CHECK .. " Saved") or "+ Save"  
-	saveCardBtn.TextColor3 = alreadySaved and C.fav or C.textDim  
-	saveCardBtn.Font, saveCardBtn.TextSize, saveCardBtn.ZIndex, saveCardBtn.ClipsDescendants = Enum.Font.GothamBold, s(7), 6, true  
-	saveCardBtn:SetAttribute("_savedState", alreadySaved and true or false)  
-	createCorner(saveCardBtn, R_SMALL)  
+	saveCardBtn.Text = alreadySaved and "SAVED" or "SAVE"
+	saveCardBtn.TextColor3 = alreadySaved and C.fav or C.text
+	saveCardBtn.Font = Enum.Font.GothamBold
+	saveCardBtn.TextSize = s(8.5)
+	saveCardBtn.ZIndex, saveCardBtn.ClipsDescendants = 6, true
+	createCorner(saveCardBtn, R_SMALL)
+	tagTheme(saveCardBtn, "TextColor3", "text")
 
+	-- ============================================================
+	-- PLAY BUTTON — pakai TEXT LABEL + kecilin icon-nya
+	-- ============================================================
 	local wearCardBtn = Instance.new("TextButton", cardActions)  
 	wearCardBtn.Size, wearCardBtn.Position = UDim2.new(0.5, -s(1), 1, 0), UDim2.new(0.5, s(2), 0, 0)  
-	wearCardBtn.BackgroundColor3, wearCardBtn.BackgroundTransparency = C.surface, 0.05  
-	tagTheme(wearCardBtn, "BackgroundColor3", "surface")  
-	wearCardBtn.Text, wearCardBtn.TextColor3 = ICO_PLAY .. " Wear", C.textDim  
-	tagTheme(wearCardBtn, "TextColor3", "textDim")  
-	wearCardBtn.Font, wearCardBtn.TextSize, wearCardBtn.ZIndex, wearCardBtn.ClipsDescendants = Enum.Font.GothamBold, s(7), 6, true  
-	createCorner(wearCardBtn, R_SMALL)  
+	wearCardBtn.BackgroundColor3, wearCardBtn.BackgroundTransparency = C.surfaceHi, 0.05  
+	tagTheme(wearCardBtn, "BackgroundColor3", "surfaceHi")  
+	wearCardBtn.Text = "PLAY"
+	wearCardBtn.TextColor3 = C.text
+	wearCardBtn.Font = Enum.Font.GothamBold
+	wearCardBtn.TextSize = s(8.5)
+	wearCardBtn.ZIndex, wearCardBtn.ClipsDescendants = 6, true
+	createCorner(wearCardBtn, R_SMALL)
+	tagTheme(wearCardBtn, "TextColor3", "text")
 
 	saveCardBtn.MouseButton1Click:Connect(function()  
 		local nowSaved = toggleBookmark(bundle.Id, bundle.Name)  
-		saveCardBtn.Text = nowSaved and (ICO_CHECK .. " Saved") or "+ Save"  
-		saveCardBtn.TextColor3 = nowSaved and C.fav or C.textDim  
+		saveCardBtn.Text = nowSaved and "SAVED" or "SAVE"
+		saveCardBtn.TextColor3 = nowSaved and C.fav or C.text
+		showToast(nowSaved and "Saved to bookmarks" or "Removed from saved")
 		saveCardBtn:SetAttribute("_savedState", nowSaved and true or false)  
 		if activeBundleId == bundle.Id then refreshBookmarkBtn() end  
 		if currentTab == "Saved" and not nowSaved then  
@@ -1487,10 +1913,11 @@ for i = start, ending do
 	end)  
 
 	wearCardBtn.MouseButton1Click:Connect(function()  
-		wearCardBtn.Text = ICO_DOTS  
-		wearBundleQuickly(bundle.Id, function()  
-			if wearCardBtn and wearCardBtn.Parent then wearCardBtn.Text = ICO_PLAY .. " Wear" end  
-		end)  
+		wearCardBtn.Text = "..."  
+		wearBundleQuickly(bundle.Id, function(success)
+			if wearCardBtn and wearCardBtn.Parent then wearCardBtn.Text = "PLAY" end
+			showToast(success and ("Equipped " .. truncate(bundle.Name, 14)) or "Failed to load")
+		end)
 	end)  
 
 	local dummy, animator, conn = buildViewportSkeleton(box)  
@@ -1526,7 +1953,10 @@ end
 
 gridScroller.CanvasSize = UDim2.new(0, 0, 0, s(220))  
 pageLbl.Text = "Page " .. tostring(currentPageIndex)  
-prevBtn.BackgroundTransparency, prevBtn.TextColor3 = (currentPageIndex > 1) and 0.15 or 0.5, (currentPageIndex > 1) and C.text or C.textMuted
+prevBtn.BackgroundTransparency = (currentPageIndex > 1) and 0.15 or 0.5
+setIconColor(prevBtn, (currentPageIndex > 1) and C.text or C.textMuted)
+nextBtn.BackgroundTransparency = 0.15
+setIconColor(nextBtn, C.text)
 
 end
 
@@ -1559,7 +1989,8 @@ else
 			searchResults = pages:GetCurrentPage()  
 			drawGridPage(searchResults)  
 		else  
-			pageLbl.Text, loadingOverlay.Text = "Error", "Search Error"  
+			pageLbl.Text, loadingOverlay.Text = "Error", "Search Error"
+			showToast("Search error")
 		end  
 	end)  
 end
@@ -1625,7 +2056,12 @@ local payload = currentBundleItems[string.lower(activeMasterType)]
 if payload then
 local tracks = get(payload.Id, nil, payload.AssetType)
 local tPlay = getSpecificTrack(tracks, string.lower(activeMasterType))
-if tPlay then preloadAnimations({tPlay}); applyAnimationToCharacter(lp.Character, {tPlay}, activeMasterType) end
+if tPlay then
+	preloadAnimations({tPlay}); applyAnimationToCharacter(lp.Character, {tPlay}, activeMasterType)
+	showToast("Equipped " .. (shortNames[string.lower(activeMasterType)] or "animation"))
+else
+	showToast("Failed to load")
+end
 end
 wearSelectedBtn.Text = "Wear Selected"
 removeShimmer(wearSelectedBtn)
@@ -1636,6 +2072,7 @@ if not lp.Character then return end
 wearAllBtn.Text = "Loading..."
 applyShimmer(wearAllBtn, C.surfaceHi, C.text)
 applyBundleItemsToCharacter(currentBundleItems)
+showToast("Equipped full bundle")
 wearAllBtn.Text = "Wear All"
 removeShimmer(wearAllBtn)
 end)
@@ -1668,13 +2105,13 @@ for _, d in ipairs(g:GetDescendants()) do
 	-- fav state (Saved tab star)  
 	local favAttr = d:GetAttribute("_fav")  
 	if favAttr ~= nil then  
-		d.TextColor3 = favAttr and C.fav or C.textMuted  
+		setIconColor(d, favAttr and C.fav or C.textMuted)
 	end  
 
 	-- save-card state  
 	local savedAttr = d:GetAttribute("_savedState")  
 	if savedAttr ~= nil then  
-		d.TextColor3 = savedAttr and C.fav or C.textDim  
+		setIconColor(d, savedAttr and C.fav or C.textDim)
 	end  
 end  
 
@@ -1695,9 +2132,9 @@ if refreshAnimButtonVisuals then refreshAnimButtonVisuals() end
 refreshBookmarkBtn()  
 
 -- 4) Update theme button text  
-themeBtn.Text = (Theme == "Dark") and "LIGHT" or "DARK"  
+setIconName(themeBtn, (Theme == "Dark") and "sun" or "moon")
 
--- 5) Shimmer refresh  
+-- 5) Shimmer refresh — RESTART biar warnanya update + animasi reset  
 for _, d in ipairs(g:GetDescendants()) do  
 	if d:IsA("UIGradient") and d.Name == "ShimmerGrad" then  
 		d.Color = ColorSequence.new({  
@@ -1705,6 +2142,8 @@ for _, d in ipairs(g:GetDescendants()) do
 			ColorSequenceKeypoint.new(0.5, C.surfaceHi),  
 			ColorSequenceKeypoint.new(1, C.panel)  
 		})  
+		-- Reset offset biar animasi ke-restart dari awal  
+		pcall(function() d.Offset = Vector2.new(-1, 0) end)  
 	end  
 end  
 
@@ -1718,12 +2157,47 @@ end
 themeBtn.MouseButton1Click:Connect(function()
 local nextTheme = (Theme == "Dark") and "Light" or "Dark"
 applyTheme(nextTheme)
+showToast("Theme: " .. nextTheme)
 end)
 
 -- ============================================================
 -- INIT
 -- ============================================================
 
-themeBtn.Text = (Theme == "Dark") and "LIGHT" or "DARK"
+setIconName(themeBtn, (Theme == "Dark") and "sun" or "moon")
 
 executeSearch("")
+
+-- ============================================================
+-- APPLY SHIMMER EFFECT KE TOMBOL-TOMBOL (Tambahan)
+-- ============================================================
+
+local shimmerButtons = {
+	searchBtn,
+	prevBtn,
+	nextBtn,
+	themeBtn,
+	wearSelectedBtn,
+	wearAllBtn,
+	bookmarkBtn,
+	tabDiscoverBtn,
+	tabSavedBtn,
+}
+
+local shimmerInstances = {}
+for _, btn in ipairs(shimmerButtons) do
+	local shimmer = Shime.new(
+		btn,
+		1.5,
+		Enum.EasingStyle.Sine,
+		Enum.EasingDirection.InOut,
+		-1,
+		false,
+		1.5
+	)
+	shimmer:Play()
+	table.insert(shimmerInstances, shimmer)
+end
+
+print("[Shime] Shimmer aktif di " .. #shimmerButtons .. " tombol!")
+print("[FE UGC Animations V2.5.0] Loaded — @in66ar")
