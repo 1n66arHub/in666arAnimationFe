@@ -1,11 +1,21 @@
 --[[
-FE UGC ANIMATIONS V2.7.6-OBSIDIAN-R2.6.4
+MOTION VAULT (feat. FE UGC ANIMATIONS engine)
 Made By @in66ar
 
-Fix final:
-  - FIX: syntax error "local = " di akhir script
-  - FIX: tab visual balik ke lama setelah hover
-         (attribute _tk_BackgroundColor3 di-update juga)
+Changelog r3.0.1:
+  - FIX: list Saved ke potong tombol Animations/Emotes (currentTab dideklarasi sebelum updateGridLayout)
+  - FIX: tombol segment & tab abu2 di mobile (hover tween ngalahin warna aktif -> _noHover)
+  - FIX: tombol X search box error (executeSearch dideklarasi sebelum dipakai)
+  - POLISH: transisi warna tab/segment smooth (tween), render kartu dipecah per-frame
+  - POLISH: header sejajar (tabs pill & tombol window satu garis, lebih ke atas)
+  - KEEP: ukuran GUI (W,H) tetap sama, preview border, pipeline animasi, theme
+
+Changelog r3.0.0:
+  - Rename: FE UGC ANIMATIONS -> MOTION VAULT (branding only)
+  - FIX: header overflow pada layar compact (tabsW clamp + titleW adaptif)
+  - FEAT: Saved tab segmented control (Animations / Emotes)
+  - FEAT: Save Emote (file baru FeUgcAnim_SavedEmotes.json)
+  - FEAT: Emote card SAVE button (paralel dengan animasi card)
 ]]
 
 local track
@@ -120,7 +130,7 @@ local SFX_URL = "https://cdn.jsdelivr.net/gh/1n66arHub/in666arAnimationFe@main/u
 local SFX_FILE = "FeUgcAnim_click_v1.mp3"
 local SFX_MIN_SIZE = 5000
 local SFX_VOLUME = 0.6
-local SFX_SETTINGS_FILE = "FE_UGC_Sound.json"
+local SFX_SETTINGS_FILE = "MotionVault_Sound.json"
 
 local _writeSeq = 0
 local _writeToken = {}
@@ -262,9 +272,10 @@ local ICO_DOT  = uchr(226,128,162)
 
 local CACHE_FILE_NAME = "animation_bundle_data_cache.json"
 local ANIM_CACHE_URL = "https://raw.githubusercontent.com/TribalFootball/TuffTeto/main/animation_bundle_data_cache.json"
-local EQUIPPED_FILE = "FeUgcAnim.json"
-local SAVED_BUNDLES_FILE = "FeUgcAnim_Bookmarks.json"
-local THEME_FILE = "FE_UGC_Animations_Theme.json"
+local EQUIPPED_FILE = "MotionVault_Equipped.json"
+local SAVED_BUNDLES_FILE = "MotionVault_Bookmarks.json"
+local SAVED_EMOTES_FILE  = "MotionVault_SavedEmotes.json"
+local THEME_FILE = "MotionVault_Theme.json"
 
 local EMOTE_URL = "https://raw.githubusercontent.com/DRYF-1/Roblox-Emote/refs/heads/main/EmoteSniper.json"
 local emoteList, emoteFiltered = {}, {}
@@ -289,7 +300,7 @@ task.spawn(function()
 	end
 	table.sort(emoteList, function(a,b) return a.Name:lower() < b.Name:lower() end)
 	emoteLoadStatus = #emoteList .. " emotes"
-	print("[V2.7.6-OBSIDIAN-R2.6.4] Emotes:", emoteLoadStatus, string.format("(%.1fs)", tick() - t))
+	print("[MOTION VAULT r3.0.1] Emotes:", emoteLoadStatus, string.format("(%.1fs)", tick() - t))
 end)
 
 local Themes = {
@@ -361,6 +372,12 @@ syncC()
 
 local assetCache, fileCache, equippedAnims = {}, {}, {}
 local savedBookmarks = {}
+local savedEmotes = {}
+local savedCategory = "Animations" -- "Animations" | "Emotes"
+
+-- FIX r3.0.1: forward declaration (dipakai oleh fungsi yang didefinisikan lebih awal)
+local currentTab = "Discover"
+local executeSearch, refreshTabVisuals, refreshAnimButtonVisuals
 
 local function loadJSON(file)
 	local ok, content = pcall(function()
@@ -380,6 +397,7 @@ end
 fileCache = loadJSON(CACHE_FILE_NAME)
 equippedAnims = loadJSON(EQUIPPED_FILE)
 savedBookmarks = loadJSON(SAVED_BUNDLES_FILE)
+savedEmotes = loadJSON(SAVED_EMOTES_FILE)
 
 task.spawn(function()
 	local ok, oc = pcall(function() return game:HttpGet(ANIM_CACHE_URL) end)
@@ -523,10 +541,12 @@ local RIGHT_W = INNER_W - LEFT_W - s(1)
 
 local HB = math.max(s(32), 34)
 local HDR_BTN = s(28) HDR_GAP = s(4)
+-- r3.0.1: geser baris header (tombol window + tabs). Negatif = naik, positif = turun.
+local HDR_Y = 0
 local scrollW = s(4) VP_H = s(175) MIN_BTN_SIZE = s(60)
 local UI_BUSY = false TOGGLE_COOLDOWN = 0.15
 
-print("[V2.7.6-OBSIDIAN-R2.6.4] Layout: W="..W.." H="..H.." LEFT="..LEFT_W.." RIGHT="..RIGHT_W)
+print("[MOTION VAULT r3.0.1] Layout: W="..W.." H="..H.." LEFT="..LEFT_W.." RIGHT="..RIGHT_W)
 
 local function tween(obj, props, dur, style, dir)
 	local t = ts:Create(obj, TweenInfo.new(dur or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
@@ -880,7 +900,7 @@ Instance.new("UICorner", minBtnBg).CornerRadius = UDim.new(0.5, 0)
 createStroke(minBtnBg, C.strokeStrong, 1, 0, "strokeStrong")
 applyCoolGradient(minBtnBg)
 end
-createLabel(minBtn, {text = "UGC", font = FONT.title, size = s(13), textKey = "text"})
+createLabel(minBtn, {text = "MV", font = FONT.title, size = s(13), textKey = "text"})
 local minBtnHit = Instance.new("TextButton", minBtn)
 minBtnHit.Size, minBtnHit.BackgroundTransparency, minBtnHit.Text, minBtnHit.ClipsDescendants = UDim2.new(1,0,1,0), 1, "", true
 
@@ -937,7 +957,7 @@ headerBar.Size = UDim2.new(1,0,0,PAD_TOP - s(6))
 headerBar.Position = UDim2.new(0,0,0,-PAD_TOP); headerBar.BackgroundTransparency = 1
 
 createLabel(headerBar, {
-	text = "FE UGC ANIMATIONS", font = FONT.title, size = s(15),
+	text = "MOTION VAULT", font = FONT.title, size = s(15),
 	align = Enum.TextXAlignment.Left,
 	uiSize = UDim2.new(1, -s(220), 0, s(18)),
 	pos = UDim2.new(0, s(2), 0, s(3)), textKey = "text"
@@ -960,16 +980,18 @@ end
 
 local tabDiscoverBtn, tabSavedBtn, tabEmoteBtn
 do
-local titleW = s(150)
+local titleW = IS_COMPACT and s(112) or s(150)
 local btnAreaW = 5 * HDR_BTN + 4 * HDR_GAP + s(8)
-local tabsW = math.clamp(W - titleW - btnAreaW - s(30), s(150), s(300))
+local tabsW = math.clamp(W - titleW - btnAreaW - s(20), s(120), s(300))
 
+-- r3.0.1: tabs pill tingginya = tombol window, sejajar satu garis
+local PILL_H = HDR_BTN
 local tabsPill = Instance.new("Frame", headerBar)
-tabsPill.Size = UDim2.new(0, tabsW, 0, HB)
-tabsPill.AnchorPoint = Vector2.new(0, 0.5)
-tabsPill.Position = UDim2.new(0, titleW, 0.5, 0); tabsPill.BorderSizePixel = 0
+tabsPill.Size = UDim2.new(0, tabsW, 0, PILL_H)
+tabsPill.AnchorPoint = Vector2.new(0, 0)
+tabsPill.Position = UDim2.new(0, titleW, 0, HDR_Y); tabsPill.BorderSizePixel = 0
 tagTheme(tabsPill, "BackgroundColor3", "panel")
-createCorner(tabsPill, HB)
+createCorner(tabsPill, PILL_H)
 createStroke(tabsPill, C.strokeStrong, 1, 0.2, "strokeStrong")
 local tPad = Instance.new("UIPadding", tabsPill)
 tPad.PaddingLeft = UDim.new(0, 3); tPad.PaddingRight = UDim.new(0, 3)
@@ -978,23 +1000,27 @@ tPad.PaddingTop = UDim.new(0, 3); tPad.PaddingBottom = UDim.new(0, 3)
 tabDiscoverBtn = createButton(tabsPill, {
 	uiSize = UDim2.new(1/3, -2, 1, 0), pos = UDim2.new(0,0,0,0),
 	text = "Discover", font = FONT.tab, size = s(10),
-	bg = C.accent, textKey = "onAccent", radius = HB
+	bg = C.accent, textKey = "onAccent", radius = PILL_H
 })
 tabSavedBtn = createButton(tabsPill, {
 	uiSize = UDim2.new(1/3, -2, 1, 0), pos = UDim2.new(1/3, 0, 0, 0),
 	text = "Saved", font = FONT.tab, size = s(10),
-	bg = C.bg, textKey = "text", radius = HB
+	bg = C.bg, textKey = "text", radius = PILL_H
 })
 tabEmoteBtn = createButton(tabsPill, {
 	uiSize = UDim2.new(1/3, -2, 1, 0), pos = UDim2.new(2/3, 0, 0, 0),
 	text = "Emotes", font = FONT.tab, size = s(10),
-	bg = C.bg, textKey = "text", radius = HB
+	bg = C.bg, textKey = "text", radius = PILL_H
 })
+-- FIX r3.0.1: matiin hover tween biar warna tab aktif ga abu2 di mobile
+tabDiscoverBtn:SetAttribute("_noHover", true)
+tabSavedBtn:SetAttribute("_noHover", true)
+tabEmoteBtn:SetAttribute("_noHover", true)
 end
 
 local soundBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
-	pos = UDim2.new(1, -(HDR_BTN*5 + HDR_GAP*4), 0, 0),
+	pos = UDim2.new(1, -(HDR_BTN*5 + HDR_GAP*4), 0, HDR_Y),
 	bgKey = "surface", bgTransparency = 0, text = "", radius = R_BUTTON,
 	strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
 })
@@ -1004,7 +1030,7 @@ if not SoundFx.isEnabled() then soundBtn.Text = "×"; soundBtn.TextColor3 = C.te
 
 local resetBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
-	pos = UDim2.new(1, -(HDR_BTN*4 + HDR_GAP*3), 0, 0),
+	pos = UDim2.new(1, -(HDR_BTN*4 + HDR_GAP*3), 0, HDR_Y),
 	bgKey = "surface", bgTransparency = 0, text = "", radius = R_BUTTON,
 	strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
 })
@@ -1012,7 +1038,7 @@ makeIcon(resetBtn, "reset", s(14))
 
 local themeBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
-	pos = UDim2.new(1, -(HDR_BTN*3 + HDR_GAP*2), 0, 0),
+	pos = UDim2.new(1, -(HDR_BTN*3 + HDR_GAP*2), 0, HDR_Y),
 	bgKey = "surface", bgTransparency = 0, text = "", radius = R_BUTTON,
 	strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
 })
@@ -1020,7 +1046,7 @@ makeIcon(themeBtn, (Theme == "Dark") and "sun" or "moon", s(14))
 
 local minWindowBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
-	pos = UDim2.new(1, -(HDR_BTN*2 + HDR_GAP*1), 0, 0),
+	pos = UDim2.new(1, -(HDR_BTN*2 + HDR_GAP*1), 0, HDR_Y),
 	bgKey = "surface", bgTransparency = 0, text = "", radius = R_BUTTON,
 	strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
 })
@@ -1028,7 +1054,7 @@ makeIcon(minWindowBtn, "minimize", s(14))
 
 local closeWindowBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
-	pos = UDim2.new(1, -HDR_BTN, 0, 0),
+	pos = UDim2.new(1, -HDR_BTN, 0, HDR_Y),
 	bgKey = "surface", bgTransparency = 0, text = "", radius = R_BUTTON,
 	strokeColor = C.strokeStrong, strokeKey = "strokeStrong",
 	hoverBg = Color3.fromRGB(75,75,80)
@@ -1097,17 +1123,36 @@ local sbPad = Instance.new("UIPadding", sb)
 sbPad.PaddingLeft = UDim.new(0, s(10)); sbPad.PaddingRight = UDim.new(0, s(24))
 
 local clearSearchBtn = Instance.new("TextButton", sb)
-clearSearchBtn.Size = UDim2.new(0, s(16), 0, s(16))
+clearSearchBtn.Name = "ClearSearchBtn"
+clearSearchBtn.Size = UDim2.new(0, s(18), 0, s(18))
 clearSearchBtn.AnchorPoint = Vector2.new(1, 0.5)
-clearSearchBtn.Position = UDim2.new(1, -s(6), 0.5, 0)
-clearSearchBtn.BackgroundColor3 = C.surfaceHi; clearSearchBtn.BackgroundTransparency = 0
-clearSearchBtn.Text = ""; clearSearchBtn.AutoButtonColor = false
-clearSearchBtn.Visible = false; clearSearchBtn.ZIndex = 3
+clearSearchBtn.Position = UDim2.new(1, -s(4), 0.5, 0)
+clearSearchBtn.BackgroundColor3 = C.surfaceHi
+clearSearchBtn.BackgroundTransparency = 0.15
+clearSearchBtn.Text = ""
+clearSearchBtn.AutoButtonColor = false
+clearSearchBtn.Active = true
+clearSearchBtn.Visible = false
+clearSearchBtn.ZIndex = 5
 createCorner(clearSearchBtn, R_SMALL)
 tagTheme(clearSearchBtn, "BackgroundColor3", "surfaceHi")
-makeIcon(clearSearchBtn, "close", s(11))
+
+local clearX = Instance.new("TextLabel", clearSearchBtn)
+clearX.Name = "XLabel"
+clearX.BackgroundTransparency = 1
+clearX.Size = UDim2.new(1, 0, 1, 0)
+clearX.Font = Enum.Font.GothamBold
+clearX.TextSize = s(11)
+clearX.Text = "X"
+clearX.TextColor3 = C.text
+clearX.ZIndex = 6
+tagTheme(clearX, "TextColor3", "text")
+
 clearSearchBtn.MouseButton1Click:Connect(function()
-	SoundFx.click(); sb.Text = ""; clearSearchBtn.Visible = false
+	SoundFx.click()
+	sb.Text = ""
+	clearSearchBtn.Visible = false
+	if executeSearch then executeSearch("") end
 end)
 sb:GetPropertyChangedSignal("Text"):Connect(function()
 	clearSearchBtn.Visible = (#sb.Text > 0)
@@ -1132,11 +1177,88 @@ gridScroller.ScrollBarImageColor3 = C.accentDim
 gridScroller.ScrollBarImageTransparency = 0.3
 gridScroller.CanvasSize = UDim2.new(0,0,0,0)
 gridScroller.AutomaticCanvasSize = Enum.AutomaticSize.Y
+gridScroller.ElasticBehavior = Enum.ElasticBehavior.Never
+gridScroller.ScrollingDirection = Enum.ScrollingDirection.Y
 gridScroller.ZIndex = 1
 tagTheme(gridScroller, "BackgroundColor3", "bg")
 tagTheme(gridScroller, "ScrollBarImageColor3", "accentDim")
 createCorner(gridScroller, R_PANEL)
 createStroke(gridScroller, C.stroke, 1, 0.3, "stroke")
+
+-- Segmented control untuk Saved tab (Animations / Emotes)
+-- r3.0.1: opaque + posisi tepat di bawah search row (y=44, tinggi 28)
+local savedSegmentHolder = Instance.new("Frame", lp_frame)
+savedSegmentHolder.Name = "SavedSegment"
+savedSegmentHolder.Size = UDim2.new(1, -s(12), 0, s(28))
+savedSegmentHolder.Position = UDim2.new(0, s(6), 0, s(44))
+savedSegmentHolder.BackgroundColor3 = C.bg
+savedSegmentHolder.BackgroundTransparency = 0
+savedSegmentHolder.BorderSizePixel = 0
+savedSegmentHolder.Visible = false
+savedSegmentHolder.ZIndex = 3
+tagTheme(savedSegmentHolder, "BackgroundColor3", "bg")
+createCorner(savedSegmentHolder, R_INPUT)
+createStroke(savedSegmentHolder, C.strokeStrong, 1, 0.3, "strokeStrong")
+
+local savedSegAnim = createButton(savedSegmentHolder, {
+	uiSize = UDim2.new(0.5, -s(5), 1, -s(6)),
+	pos = UDim2.new(0, s(3), 0, s(3)),
+	text = "ANIMATIONS", bg = C.accent, textKey = "onAccent",
+	font = FONT.buttonSm, size = s(10), radius = R_SMALL
+})
+savedSegAnim.BackgroundTransparency = 0
+savedSegAnim.ZIndex = 4
+savedSegAnim:SetAttribute("_tk_BackgroundColor3", "accent")
+savedSegAnim:SetAttribute("_tk_TextColor3", "onAccent")
+
+local savedSegEmote = createButton(savedSegmentHolder, {
+	uiSize = UDim2.new(0.5, -s(5), 1, -s(6)),
+	pos = UDim2.new(0.5, s(2), 0, s(3)),
+	text = "EMOTES", bg = C.bg, textKey = "textMuted",
+	font = FONT.buttonSm, size = s(10), radius = R_SMALL
+})
+savedSegEmote.BackgroundTransparency = 0
+savedSegEmote.ZIndex = 4
+savedSegEmote:SetAttribute("_tk_BackgroundColor3", "bg")
+savedSegEmote:SetAttribute("_tk_TextColor3", "textMuted")
+
+-- FIX r3.0.1: matiin hover tween (penyebab warna aktif jadi abu2 di mobile)
+savedSegAnim:SetAttribute("_noHover", true)
+savedSegEmote:SetAttribute("_noHover", true)
+
+local function refreshSavedSegment(instant)
+	local t = Themes[Theme]
+	local aBg, aTx, eBg, eTx
+	if savedCategory == "Animations" then
+		aBg, aTx, eBg, eTx = t.accent, t.onAccent, t.bg, t.textMuted
+		savedSegAnim:SetAttribute("_tk_BackgroundColor3", "accent"); savedSegAnim:SetAttribute("_tk_TextColor3", "onAccent")
+		savedSegEmote:SetAttribute("_tk_BackgroundColor3", "bg"); savedSegEmote:SetAttribute("_tk_TextColor3", "textMuted")
+	else
+		aBg, aTx, eBg, eTx = t.bg, t.textMuted, t.accent, t.onAccent
+		savedSegAnim:SetAttribute("_tk_BackgroundColor3", "bg"); savedSegAnim:SetAttribute("_tk_TextColor3", "textMuted")
+		savedSegEmote:SetAttribute("_tk_BackgroundColor3", "accent"); savedSegEmote:SetAttribute("_tk_TextColor3", "onAccent")
+	end
+	if instant then
+		savedSegAnim.BackgroundColor3 = aBg; savedSegAnim.TextColor3 = aTx
+		savedSegEmote.BackgroundColor3 = eBg; savedSegEmote.TextColor3 = eTx
+	else
+		tween(savedSegAnim, {BackgroundColor3 = aBg, TextColor3 = aTx}, 0.18)
+		tween(savedSegEmote, {BackgroundColor3 = eBg, TextColor3 = eTx}, 0.18)
+	end
+end
+refreshSavedSegment(true)
+
+-- FIX r3.0.1: currentTab sudah dideklarasi di atas, jadi fungsi ini benar-benar jalan
+local function updateGridLayout()
+	if currentTab == "Saved" then
+		-- segment: y=44..72, gap 6, grid mulai y=78, bottom tetap 28 dari bawah
+		gridScroller.Position = UDim2.new(0, s(6), 0, s(78))
+		gridScroller.Size = UDim2.new(1, -s(12), 1, -s(106))
+	else
+		gridScroller.Position = UDim2.new(0, s(6), 0, s(44))
+		gridScroller.Size = UDim2.new(1, -s(12), 1, -s(72))
+	end
+end
 
 local loadingOverlay = Instance.new("TextLabel", lp_frame)
 loadingOverlay.Size, loadingOverlay.Position = gridScroller.Size, gridScroller.Position
@@ -1217,6 +1339,7 @@ tagTheme(masterViewport, "BackgroundColor3", "overlay")
 createCorner(masterViewport, s(10))
 createStroke(masterViewport, C.stroke, 1, 0.3, "stroke")
 
+-- PREVIEW BORDER DIPERTAHANKAN UTUH
 local previewBorder = Instance.new("ImageLabel", rp)
 previewBorder.Name = "PreviewBorder"
 previewBorder.Size = UDim2.new(1, -s(20), 0, VP_H + s(6))
@@ -1306,7 +1429,6 @@ local activeMasterTrack, activeMasterType = nil, nil
 local activeBundleName, activeBundleId = "None", nil
 local searchResults, savedTabList = {}, {}
 local catalogCursor = nil
-local currentTab = "Discover"
 local userSelectedAnimSlot = "idleanimation"
 local renderedCount = 0
 local renderingMore = false
@@ -1314,7 +1436,6 @@ local renderToken = 0
 local ITEMS_PER_LOAD = 6
 local emoteAnimCache = {}
 local emoteValidCache = {}
-local executeSearch, refreshTabVisuals, refreshAnimButtonVisuals
 
 local function preloadAnimations(tracks)
 	local i = {}
@@ -1562,6 +1683,18 @@ local function toggleBookmark(bundleId, bundleName)
 	saveJSON(SAVED_BUNDLES_FILE, savedBookmarks); return nowSaved
 end
 
+local function toggleEmoteSave(emote)
+	if not emote or not emote.Id then return false end
+	local sid = tostring(emote.Id)
+	local nowSaved
+	if savedEmotes[sid] then
+		savedEmotes[sid] = nil; nowSaved = false
+	else
+		savedEmotes[sid] = {Id = emote.Id, Name = emote.Name, Time = tick()}; nowSaved = true
+	end
+	saveJSON(SAVED_EMOTES_FILE, savedEmotes); return nowSaved
+end
+
 local function playEmoteFromList(e)
 	local char = lp.Character
 	if not char then showToast("Character belum spawn", "warn") return end
@@ -1758,6 +1891,7 @@ for _, lt in ipairs(buttonOrder) do
 		font = FONT.slot, size = s(9), radius = R_SMALL,
 		strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
 	})
+	btn:SetAttribute("_noHover", true)
 	btn.MouseButton1Click:Connect(function()
 		local payload = currentBundleItems[lt]
 		if not payload then
@@ -1807,11 +1941,14 @@ refreshAnimButtonVisuals = function()
 	end
 end
 
+-- bookmark button juga rawan hover-abu2 di mobile
+bookmarkBtn:SetAttribute("_noHover", true)
+
 bookmarkBtn.MouseButton1Click:Connect(function()
 	local nowS = toggleBookmark(activeBundleId, activeBundleName)
 	showToast(nowS and "Saved to bookmarks" or "Removed from saved", nowS and "success" or "info")
 	refreshBookmarkBtn()
-	if currentTab == "Saved" then executeSearch(sb.Text) end
+	if currentTab == "Saved" and savedCategory == "Animations" then executeSearch(sb.Text) end
 end)
 
 local function inspectBundleDetails(bundleId, bundleName)
@@ -1983,7 +2120,7 @@ local function createBundleCard(bundle, idx)
 		SoundFx.click(); inspectBundleDetails(bundle.Id, bundle.Name)
 	end)
 
-	if currentTab == "Saved" then
+	if currentTab == "Saved" and savedCategory == "Animations" then
 		local favBtn = Instance.new("TextButton", box)
 		favBtn.Size = UDim2.new(0, s(22), 0, s(22))
 		favBtn.Position = UDim2.new(1, -s(24), 0, s(2))
@@ -2072,21 +2209,19 @@ local function createBundleCard(bundle, idx)
 		local t = Themes[Theme]
 		if nowS then
 			saveCardBtn.Text = "SAVED"
-			saveCardBtn.BackgroundColor3 = t.accent
-			saveCardBtn.TextColor3 = t.onAccent
 			saveCardBtn:SetAttribute("_tk_BackgroundColor3", "accent")
 			saveCardBtn:SetAttribute("_tk_TextColor3", "onAccent")
+			tween(saveCardBtn, {BackgroundColor3 = t.accent, TextColor3 = t.onAccent}, 0.15)
 		else
 			saveCardBtn.Text = "SAVE"
-			saveCardBtn.BackgroundColor3 = t.surfaceHi
-			saveCardBtn.TextColor3 = t.text
 			saveCardBtn:SetAttribute("_tk_BackgroundColor3", "surfaceHi")
 			saveCardBtn:SetAttribute("_tk_TextColor3", "text")
+			tween(saveCardBtn, {BackgroundColor3 = t.surfaceHi, TextColor3 = t.text}, 0.15)
 		end
 		saveCardBtn:SetAttribute("_saveState", nowS)
 		showToast(nowS and "Saved to bookmarks" or "Removed from saved", nowS and "success" or "info")
 		if activeBundleId == bundle.Id then refreshBookmarkBtn() end
-		if currentTab == "Saved" and not nowS then executeSearch(sb.Text) end
+		if currentTab == "Saved" and savedCategory == "Animations" and not nowS then executeSearch(sb.Text) end
 	end)
 
 	wearCardBtn.MouseButton1Click:Connect(function()
@@ -2184,26 +2319,73 @@ local function createEmoteCard(e, idx)
 	nameLbl.ZIndex = 3
 	tagTheme(nameLbl, "TextColor3", "text")
 
-	local actionBtn = Instance.new("TextButton", card)
-	actionBtn.Size = UDim2.new(1, -pad*2, 0, btnH)
-	actionBtn.Position = UDim2.new(0, pad, 0, pad + thumbH + s(2) + nameH + s(2))
-	actionBtn.BackgroundColor3 = C.accent
-	actionBtn.BorderSizePixel = 0
-	actionBtn.Text = "PLAY"
-	actionBtn.Font = FONT.buttonSm
-	actionBtn.TextSize = s(9)
-	actionBtn.TextColor3 = C.onAccent
-	actionBtn.AutoButtonColor = false
-	actionBtn.ZIndex = 5
-	tagTheme(actionBtn, "BackgroundColor3", "accent")
-	tagTheme(actionBtn, "TextColor3", "onAccent")
-	createCorner(actionBtn, R_SMALL)
-	actionBtn.MouseButton1Down:Connect(function()
-		actionBtn.Size = UDim2.new(1, -pad*2, 0, btnH-1)
-		SoundFx.click()
+	local btnRow = Instance.new("Frame", card)
+	btnRow.Size = UDim2.new(1, -pad*2, 0, btnH)
+	btnRow.Position = UDim2.new(0, pad, 0, pad + thumbH + s(2) + nameH + s(2))
+	btnRow.BackgroundTransparency = 1
+	btnRow.ZIndex = 5
+
+	local alreadySaved = savedEmotes[tostring(e.Id)] ~= nil
+	local saveBtn = Instance.new("TextButton", btnRow)
+	saveBtn.Size = UDim2.new(0.5, -s(1), 1, 0)
+	saveBtn.Position = UDim2.new(0, 0, 0, 0)
+	local t0 = Themes[Theme]
+	saveBtn.BackgroundColor3 = alreadySaved and t0.accent or t0.surfaceHi
+	saveBtn.TextColor3 = alreadySaved and t0.onAccent or t0.text
+	saveBtn.Text = alreadySaved and "SAVED" or "SAVE"
+	saveBtn.Font = FONT.buttonSm
+	saveBtn.TextSize = s(9)
+	saveBtn.BorderSizePixel = 0
+	saveBtn.AutoButtonColor = false
+	saveBtn.ClipsDescendants = true
+	saveBtn.ZIndex = 6
+	saveBtn:SetAttribute("_tk_BackgroundColor3", alreadySaved and "accent" or "surfaceHi")
+	saveBtn:SetAttribute("_tk_TextColor3", alreadySaved and "onAccent" or "text")
+	createCorner(saveBtn, R_SMALL)
+	saveBtn.MouseButton1Down:Connect(function()
+		saveBtn.Size = UDim2.new(0.5, -s(1), 1, -1); SoundFx.click()
 	end)
-	actionBtn.MouseButton1Up:Connect(function() actionBtn.Size = UDim2.new(1, -pad*2, 0, btnH) end)
-	actionBtn.MouseButton1Click:Connect(function() playEmoteFromList(e) end)
+	saveBtn.MouseButton1Up:Connect(function() saveBtn.Size = UDim2.new(0.5, -s(1), 1, 0) end)
+	saveBtn.MouseButton1Click:Connect(function()
+		local nowS = toggleEmoteSave(e)
+		local t = Themes[Theme]
+		if nowS then
+			saveBtn.Text = "SAVED"
+			saveBtn:SetAttribute("_tk_BackgroundColor3", "accent")
+			saveBtn:SetAttribute("_tk_TextColor3", "onAccent")
+			tween(saveBtn, {BackgroundColor3 = t.accent, TextColor3 = t.onAccent}, 0.15)
+		else
+			saveBtn.Text = "SAVE"
+			saveBtn:SetAttribute("_tk_BackgroundColor3", "surfaceHi")
+			saveBtn:SetAttribute("_tk_TextColor3", "text")
+			tween(saveBtn, {BackgroundColor3 = t.surfaceHi, TextColor3 = t.text}, 0.15)
+		end
+		showToast(nowS and "Emote saved" or "Emote removed", nowS and "success" or "info")
+		if currentTab == "Saved" and savedCategory == "Emotes" and not nowS then
+			executeSearch(sb.Text)
+		end
+	end)
+
+	local playBtn = Instance.new("TextButton", btnRow)
+	playBtn.Size = UDim2.new(0.5, -s(1), 1, 0)
+	playBtn.Position = UDim2.new(0.5, s(2), 0, 0)
+	playBtn.BackgroundColor3 = C.accent
+	playBtn.TextColor3 = C.onAccent
+	playBtn.Text = "PLAY"
+	playBtn.Font = FONT.buttonSm
+	playBtn.TextSize = s(9)
+	playBtn.BorderSizePixel = 0
+	playBtn.AutoButtonColor = false
+	playBtn.ClipsDescendants = true
+	playBtn.ZIndex = 6
+	tagTheme(playBtn, "BackgroundColor3", "accent")
+	tagTheme(playBtn, "TextColor3", "onAccent")
+	createCorner(playBtn, R_SMALL)
+	playBtn.MouseButton1Down:Connect(function()
+		playBtn.Size = UDim2.new(0.5, -s(1), 1, -1); SoundFx.click()
+	end)
+	playBtn.MouseButton1Up:Connect(function() playBtn.Size = UDim2.new(0.5, -s(1), 1, 0) end)
+	playBtn.MouseButton1Click:Connect(function() playEmoteFromList(e) end)
 
 	local cardHit = Instance.new("TextButton", card)
 	cardHit.Size = UDim2.new(1, 0, 0, pad + thumbH + s(2) + nameH)
@@ -2267,6 +2449,12 @@ local function getActiveList()
 end
 local function getStatusText() if currentTab == "Emotes" then return emoteLoadStatus end return nil end
 
+local function isEmoteView()
+	if currentTab == "Emotes" then return true end
+	if currentTab == "Saved" and savedCategory == "Emotes" then return true end
+	return false
+end
+
 local function renderMore()
 	if renderingMore then return end
 	local list = getActiveList()
@@ -2289,60 +2477,76 @@ local function renderMore()
 	renderingMore = true
 	local myToken = renderToken
 
-	if currentTab == "Emotes" then
-		local candidates = {}; local scanIdx = renderedCount
-		local maxAtt = ITEMS_PER_LOAD * 10; local scanned = 0
-		while #candidates < ITEMS_PER_LOAD * 3 and scanIdx < #list and scanned < maxAtt do
-			scanIdx = scanIdx + 1; scanned = scanned + 1
-			table.insert(candidates, list[scanIdx])
-		end
-		local idList = {}
-		for _, e in ipairs(candidates) do table.insert(idList, e.Id) end
-		local validMap = validateEmoteBatch(idList)
-		if myToken ~= renderToken then renderingMore = false; return end
-		local validRendered = 0; local consumed = 0
-		for i, e in ipairs(candidates) do
+	if isEmoteView() then
+		if currentTab == "Saved" then
+			local last = math.min(renderedCount + ITEMS_PER_LOAD, #list)
+			for i = renderedCount + 1, last do
+				if myToken ~= renderToken then renderingMore = false; return end
+				local item = list[i]
+				if item then createEmoteCard(item, i) end
+				task.wait() -- r3.0.1: pecah per-frame biar ga lag
+			end
 			if myToken ~= renderToken then renderingMore = false; return end
-			consumed = i
-			if validMap[e.Id] ~= false then
-				validRendered = validRendered + 1
-				createEmoteCard(e, renderedCount + validRendered)
+			renderedCount = last
+		else
+			local candidates = {}; local scanIdx = renderedCount
+			local maxAtt = ITEMS_PER_LOAD * 10; local scanned = 0
+			while #candidates < ITEMS_PER_LOAD * 3 and scanIdx < #list and scanned < maxAtt do
+				scanIdx = scanIdx + 1; scanned = scanned + 1
+				table.insert(candidates, list[scanIdx])
 			end
-			if validRendered >= ITEMS_PER_LOAD then break end
-		end
-		renderedCount = renderedCount + consumed
-		task.delay(1.2, function()
-			if myToken ~= renderToken then return end
-			if currentTab ~= "Emotes" then return end
-			local cards = {}
-			for _, c in ipairs(gridScroller:GetChildren()) do
-				if c:IsA("Frame") and c:FindFirstChildOfClass("ViewportFrame") then table.insert(cards, c) end
+			local idList = {}
+			for _, e in ipairs(candidates) do table.insert(idList, e.Id) end
+			local validMap = validateEmoteBatch(idList)
+			if myToken ~= renderToken then renderingMore = false; return end
+			local validRendered = 0; local consumed = 0
+			for i, e in ipairs(candidates) do
+				if myToken ~= renderToken then renderingMore = false; return end
+				consumed = i
+				if validMap[e.Id] ~= false then
+					validRendered = validRendered + 1
+					createEmoteCard(e, renderedCount + validRendered)
+					task.wait() -- r3.0.1: pecah per-frame
+				end
+				if validRendered >= ITEMS_PER_LOAD then break end
 			end
-			if #cards == 0 then return end
-			table.sort(cards, function(a, b)
-				local la, lb = a.LayoutOrder or 0, b.LayoutOrder or 0
-				if la == lb then return a.Name < b.Name end
-				return la < lb
+			if myToken ~= renderToken then renderingMore = false; return end
+			renderedCount = renderedCount + consumed
+			task.delay(1.2, function()
+				if myToken ~= renderToken then return end
+				if not isEmoteView() then return end
+				local cards = {}
+				for _, c in ipairs(gridScroller:GetChildren()) do
+					if c:IsA("Frame") and c:FindFirstChildOfClass("ViewportFrame") then table.insert(cards, c) end
+				end
+				if #cards == 0 then return end
+				table.sort(cards, function(a, b)
+					local la, lb = a.LayoutOrder or 0, b.LayoutOrder or 0
+					if la == lb then return a.Name < b.Name end
+					return la < lb
+				end)
+				local pad = s(6)
+				local usableWidth = LEFT_W - s(12) - scrollW
+				local cardW = math.floor((usableWidth - pad*2 - s(6)) / 2)
+				local thumbH = math.floor(cardW * 0.72)
+				local cardH = pad + thumbH + s(2) + s(16) + s(2) + s(22) + pad
+				for idx, c in ipairs(cards) do
+					local col = (idx - 1) % 2; local row = math.floor((idx - 1) / 2)
+					local posX = pad + col * (cardW + s(6))
+					local posY = pad + row * (cardH + s(6))
+					pcall(function() tween(c, {Position = UDim2.new(0, posX, 0, posY)}, 0.2) end)
+				end
 			end)
-			local pad = s(6)
-			local usableWidth = LEFT_W - s(12) - scrollW
-			local cardW = math.floor((usableWidth - pad*2 - s(6)) / 2)
-			local thumbH = math.floor(cardW * 0.72)
-			local cardH = pad + thumbH + s(2) + s(16) + s(2) + s(22) + pad
-			for idx, c in ipairs(cards) do
-				local col = (idx - 1) % 2; local row = math.floor((idx - 1) / 2)
-				local posX = pad + col * (cardW + s(6))
-				local posY = pad + row * (cardH + s(6))
-				pcall(function() tween(c, {Position = UDim2.new(0, posX, 0, posY)}, 0.2) end)
-			end
-		end)
+		end
 	else
 		local last = math.min(renderedCount + ITEMS_PER_LOAD, #list)
 		for i = renderedCount + 1, last do
 			if myToken ~= renderToken then renderingMore = false; return end
 			local item = list[i]
 			if item then createBundleCard(item, i) end
+			task.wait() -- r3.0.1: pecah per-frame
 		end
+		if myToken ~= renderToken then renderingMore = false; return end
 		renderedCount = last
 	end
 
@@ -2373,16 +2577,28 @@ executeSearch = function(query)
 	loadingOverlay.Visible = true; pageLbl.Text = "Loading..."
 	if currentTab == "Saved" then
 		savedTabList = {}; local q = string.lower(query)
-		for _, v in pairs(savedBookmarks) do
-			if q == "" or string.lower(v.Name):find(q, 1, true) then table.insert(savedTabList, v) end
+		if savedCategory == "Emotes" then
+			for _, v in pairs(savedEmotes) do
+				if q == "" or string.lower(v.Name):find(q, 1, true) then
+					table.insert(savedTabList, v)
+				end
+			end
+			table.sort(savedTabList, function(a,b) return (a.Time or 0) > (b.Time or 0) end)
+			loadingOverlay.Visible = false
+			if #savedTabList == 0 then drawEmptyState("No Saved Emotes", "Save emotes to find them here.")
+			else renderMore() end
+		else
+			for _, v in pairs(savedBookmarks) do
+				if q == "" or string.lower(v.Name):find(q, 1, true) then table.insert(savedTabList, v) end
+			end
+			table.sort(savedTabList, function(a,b)
+				if a.Fav == b.Fav then return (a.Time or 0) > (b.Time or 0) end
+				return a.Fav and not b.Fav
+			end)
+			loadingOverlay.Visible = false
+			if #savedTabList == 0 then drawEmptyState("No Saved Animations", "Save animations to find them here.")
+			else renderMore() end
 		end
-		table.sort(savedTabList, function(a,b)
-			if a.Fav == b.Fav then return (a.Time or 0) > (b.Time or 0) end
-			return a.Fav and not b.Fav
-		end)
-		loadingOverlay.Visible = false
-		if #savedTabList == 0 then drawEmptyState("No Saved Animations", "Save animations to find them here.")
-		else renderMore() end
 	else
 		searchResults, catalogCursor = {}, nil
 		local p = CatalogSearchParams.new()
@@ -2413,23 +2629,18 @@ gridScroller:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 	if maxY > 0 and y >= maxY - s(80) then renderMore() end
 end)
 
--- ⭐ FIX UTAMA: update attribute biar warna tab ga balik setelah hover
-refreshTabVisuals = function()
+-- r3.0.1: transisi warna tab smooth (tween), instant=true dipakai saat init / ganti theme
+refreshTabVisuals = function(instant)
 	local function paint(btn, active)
-		if active then
-			-- TAB DI-TAP = PUTIH (Dark) / HITAM (Light)
-			btn.BackgroundColor3 = C.accent
-			btn.BackgroundTransparency = 0
-			btn.TextColor3 = C.onAccent
-			btn:SetAttribute("_tk_BackgroundColor3", "accent")
-			btn:SetAttribute("_tk_TextColor3", "onAccent")
+		local bg = active and C.accent or C.bg
+		local tx = active and C.onAccent or C.text
+		btn.BackgroundTransparency = 0
+		btn:SetAttribute("_tk_BackgroundColor3", active and "accent" or "bg")
+		btn:SetAttribute("_tk_TextColor3", active and "onAccent" or "text")
+		if instant then
+			btn.BackgroundColor3 = bg; btn.TextColor3 = tx
 		else
-			-- TAB BELUM TAP = HITAM (Dark) / PUTIH (Light)
-			btn.BackgroundColor3 = C.bg
-			btn.BackgroundTransparency = 0
-			btn.TextColor3 = C.text
-			btn:SetAttribute("_tk_BackgroundColor3", "bg")
-			btn:SetAttribute("_tk_TextColor3", "text")
+			tween(btn, {BackgroundColor3 = bg, TextColor3 = tx}, 0.18)
 		end
 		local st = btn:FindFirstChildOfClass("UIStroke")
 		if st then st.Transparency = 1 end
@@ -2444,6 +2655,11 @@ local function setTab(tabName)
 	renderingMore = false
 	currentTab = tabName
 	refreshTabVisuals()
+	savedSegmentHolder.Visible = (tabName == "Saved")
+	refreshSavedSegment(true)
+	updateGridLayout()
+	loadingOverlay.Size = gridScroller.Size
+	loadingOverlay.Position = gridScroller.Position
 	clearGridFull()
 	executeSearch(sb.Text)
 end
@@ -2451,6 +2667,19 @@ end
 tabDiscoverBtn.MouseButton1Click:Connect(function() setTab("Discover") end)
 tabSavedBtn.MouseButton1Click:Connect(function() setTab("Saved") end)
 tabEmoteBtn.MouseButton1Click:Connect(function() setTab("Emotes") end)
+
+savedSegAnim.MouseButton1Click:Connect(function()
+	if savedCategory == "Animations" then return end
+	savedCategory = "Animations"
+	refreshSavedSegment()
+	executeSearch(sb.Text)
+end)
+savedSegEmote.MouseButton1Click:Connect(function()
+	if savedCategory == "Emotes" then return end
+	savedCategory = "Emotes"
+	refreshSavedSegment()
+	executeSearch(sb.Text)
+end)
 
 wearSelectedBtn.MouseButton1Click:Connect(function()
 	if not activeMasterType or not lp.Character then
@@ -2521,8 +2750,9 @@ applyTheme = function(newTheme, skipSave)
 		if parent then g:Destroy(); applyShimmer(parent, C.panel, C.surface) end
 	end
 	if mfEdge then mfEdge.Color = C.bg; mfEdge.Transparency = 1 end
-	if refreshTabVisuals then refreshTabVisuals() end
+	if refreshTabVisuals then refreshTabVisuals(true) end
 	if refreshAnimButtonVisuals then refreshAnimButtonVisuals() end
+	if refreshSavedSegment then refreshSavedSegment(true) end
 	refreshBookmarkBtn()
 	setIconName(themeBtn, (Theme == "Dark") and "sun" or "moon")
 	if previewBorder then
@@ -2547,7 +2777,7 @@ themeBtn.MouseButton1Click:Connect(function()
 end)
 
 setIconName(themeBtn, (Theme == "Dark") and "sun" or "moon")
-refreshTabVisuals()
+refreshTabVisuals(true)
 executeSearch("")
 
 task.spawn(function()
@@ -2562,7 +2792,6 @@ task.spawn(function()
 	end
 end)
 
--- ⭐ FIX: variabel shimmerButtons yang tadinya kosong
 local shimmerButtons = {
 	searchBtn, resetBtn, soundBtn, themeBtn,
 	tabDiscoverBtn, tabSavedBtn, tabEmoteBtn,
@@ -2573,4 +2802,4 @@ for _, btn in ipairs(shimmerButtons) do
 	table.insert(activeShimmers, sh)
 end
 
-print("[FE UGC Animations V2.7.6-OBSIDIAN-R2.6.4] Loaded -- @in66ar")
+print("[MOTION VAULT r3.0.1] Loaded -- @in66ar")
